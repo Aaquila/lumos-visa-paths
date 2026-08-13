@@ -1,0 +1,10 @@
+# Scraped feed database — regenerated on first run
+data/
+*.sqlite3
+
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+.env
