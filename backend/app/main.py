@@ -65,6 +65,7 @@ from .relevance import RelevanceScorer, counts
 from .scheduler import scheduler, register_scraper_job
 from .scraper import Scraper
 from .store import NewsStore
+from .summarizer import PersonalizedSummarizer
 from .database import init_db, get_db, User, UserVisaSituation, NewsArticle, UserNews, UserPreferences
 
 # Load .env from the repo root before any os.getenv calls.
@@ -89,6 +90,7 @@ store = NewsStore()
 scraper = Scraper()
 intake_resolver = IntakeResolver()
 relevance_scorer = RelevanceScorer()
+personalized_summarizer = PersonalizedSummarizer()
 
 
 # ── Google ID token verification ──────────────────────────────────────────────
@@ -313,7 +315,9 @@ async def run_scrape() -> ScrapeReport:
         # Run personalization job after scrape
         try:
             if report.items_new > 0:
-                personalization_stats = await personalize_articles(relevance_scorer)
+                personalization_stats = await personalize_articles(
+                    relevance_scorer, personalized_summarizer
+                )
                 log.info(
                     "personalization complete: processed %d users, evaluated %d articles, "
                     "created %d matches",
@@ -689,6 +693,7 @@ async def get_unread_news(
                     relevance_reason="",
                     marked_read_at=user_news.marked_read_at,
                     is_unread=user_news.is_unread,
+                    personalized_summary=user_news.personalized_summary,
                 )
             )
 
@@ -729,6 +734,7 @@ async def get_all_news(
                     relevance_reason="",
                     marked_read_at=user_news.marked_read_at,
                     is_unread=user_news.is_unread,
+                    personalized_summary=user_news.personalized_summary,
                 )
             )
 

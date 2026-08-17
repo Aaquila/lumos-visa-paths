@@ -136,6 +136,13 @@ class UserNews(Base):
     marked_read_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False, index=True)
 
+    #: Claude-written plain-language explanation of this article, personalized
+    #: to the user's own status/goal text. Null until generated (see
+    #: `app.summarizer`); a null value means "not generated yet or generation
+    #: failed", not "nothing to say" — callers fall back to `NewsArticle.summary`.
+    personalized_summary = Column(Text, nullable=True)
+    summary_generated_at = Column(DateTime(timezone=True), nullable=True)
+
     # Composite index for efficient querying: user_id + is_unread
     __table_args__ = (
         Index("idx_user_unread", "user_id", "is_unread"),
@@ -167,8 +174,29 @@ class UserPreferences(Base):
 
 
 def init_db() -> None:
-    """Create all tables."""
+    """Create all tables, then add columns an existing database is missing.
+
+    `create_all` only creates tables that don't exist yet — it never alters an
+    existing table, so a `user_news` row written before `personalized_summary`
+    existed would otherwise be invisible to every read after a deploy. SQLite's
+    `ALTER TABLE ... ADD COLUMN` is safe and idempotent; existing rows get NULL
+    until the next personalization pass fills them in.
+    """
     Base.metadata.create_all(bind=engine)
+    if DATABASE_URL.startswith("sqlite"):
+        with engine.connect() as conn:
+            existing = {
+                row[1] for row in conn.exec_driver_sql("PRAGMA table_info(user_news)")
+            }
+            for column, ddl_type in (
+                ("personalized_summary", "TEXT"),
+                ("summary_generated_at", "DATETIME"),
+            ):
+                if column not in existing:
+                    conn.exec_driver_sql(
+                        f"ALTER TABLE user_news ADD COLUMN {column} {ddl_type}"
+                    )
+            conn.commit()
 
 
 def get_db() -> Session:

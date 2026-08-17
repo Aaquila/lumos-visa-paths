@@ -389,15 +389,36 @@ class NewsItemWithReadStatus {
   const NewsItemWithReadStatus({
     required this.item,
     required this.isRead,
+    this.personalizedSummary,
   });
 
   final NewsItem item;
   final bool isRead;
 
+  /// Claude-written plain-language explanation personalized to this user's
+  /// situation. Null when not generated (no backend API key, generation
+  /// failed, or the article predates this feature) — callers fall back to
+  /// `item.summary`, the raw scraped text.
+  final String? personalizedSummary;
+
+  /// The backend's `/api/user/news/all` and `/unread` responses return flat
+  /// `UserNewsArticle` objects (`article_id`, `title`, `link`, `summary`,
+  /// `is_unread`, `personalized_summary`) — mirrors
+  /// `UserNewsArticle` in `backend/app/models.py`. There is no nested
+  /// `NewsItem` on the wire for this endpoint; the metadata that only a
+  /// scraped `NewsItem` carries (source, dates, tags) isn't returned here.
   factory NewsItemWithReadStatus.fromJson(Map<String, dynamic> j) =>
       NewsItemWithReadStatus(
-        item: NewsItem.fromJson((j['item'] as Map).cast<String, dynamic>()),
-        isRead: j['is_read'] as bool? ?? false,
+        item: NewsItem(
+          id: j['article_id'] as String? ?? '',
+          sourceId: '',
+          sourceName: '',
+          title: j['title'] as String? ?? '',
+          url: j['link'] as String? ?? '',
+          summary: j['summary'] as String? ?? '',
+        ),
+        isRead: !(j['is_unread'] as bool? ?? true),
+        personalizedSummary: j['personalized_summary'] as String?,
       );
 }
 
@@ -418,10 +439,12 @@ class PersonalisedNewsFeed {
   final String? error;
   final bool cached;
 
+  /// Backend key is `articles` (`AllNewsFeedResponse` / `UnreadNewsFeedResponse`
+  /// in `backend/app/models.py`), not `items`.
   factory PersonalisedNewsFeed.fromJson(Map<String, dynamic> j) =>
       PersonalisedNewsFeed(
         items: [
-          for (final item in (j['items'] as List? ?? const []))
+          for (final item in (j['articles'] as List? ?? const []))
             NewsItemWithReadStatus.fromJson(
               (item as Map).cast<String, dynamic>(),
             ),

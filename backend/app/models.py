@@ -480,6 +480,12 @@ class UserNewsArticle(BaseModel):
     marked_read_at: datetime | None = None
     is_unread: bool = True
 
+    #: Claude-written plain-language explanation personalized to this user's
+    #: situation. `None` when not yet generated (no API key, generation
+    #: failed, or the article predates this feature) — the client falls back
+    #: to `summary`.
+    personalized_summary: str | None = None
+
 
 class UnreadNewsFeedResponse(BaseModel):
     """Response for GET /api/user/news/unread."""

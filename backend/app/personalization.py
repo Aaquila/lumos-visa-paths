@@ -24,6 +24,7 @@ from sqlalchemy.orm import Session
 from .models import NewsItem, SituationInput
 from .database import NewsArticle, UserNews, UserVisaSituation, utcnow, SessionLocal
 from .relevance import BACKGROUND, RelevanceScorer
+from .summarizer import PersonalizedSummarizer
 
 log = logging.getLogger("lumos.personalization")
 
@@ -31,10 +32,17 @@ log = logging.getLogger("lumos.personalization")
 BATCH_SIZE = 10
 
 
-async def personalize_articles(scorer: RelevanceScorer) -> dict[str, int]:
+async def personalize_articles(
+    scorer: RelevanceScorer, summarizer: PersonalizedSummarizer | None = None
+) -> dict[str, int]:
     """Match new articles to users based on their visa situations.
 
-    Called after each scrape completes. Returns a summary dict with keys:
+    Called after each scrape completes. When `summarizer` is given and has a
+    working Claude client, each new match also gets a personalized
+    plain-language summary (`UserNews.personalized_summary`) — best-effort;
+    a failed or skipped generation just leaves the field null and callers
+    fall back to the article's raw scraped summary. Returns a summary dict
+    with keys:
     - 'users_processed': how many users were evaluated
     - 'articles_evaluated': how many new articles × users were scored
     - 'matches_created': how many new UserNews records were created
@@ -139,6 +147,21 @@ async def personalize_articles(scorer: RelevanceScorer) -> dict[str, int]:
                         relevance_reason=verdict.reason,
                         created_at=utcnow(),
                     )
+
+                    if summarizer is not None and summarizer.available:
+                        try:
+                            personalized = await summarizer.summarize(item, situation)
+                        except Exception:  # noqa: BLE001
+                            log.warning(
+                                "personalized summary failed for article %s; "
+                                "falling back to the raw summary",
+                                item.id,
+                            )
+                            personalized = None
+                        if personalized:
+                            user_news.personalized_summary = personalized
+                            user_news.summary_generated_at = utcnow()
+
                     db.add(user_news)
                     stats["matches_created"] += 1
 

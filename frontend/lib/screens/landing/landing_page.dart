@@ -403,7 +403,7 @@ class _WhatItDoes extends StatelessWidget {
     const items = [
       (
         'Understands your situation',
-        'Describe where you stand in plain words — no forms, no legal '
+        'Describe where you stand in plain words no forms, no legal '
             'vocabulary. Lumos works out your actual status and shows you '
             'what it found before anything is saved.',
         Icons.chat_bubble_outline,
@@ -421,7 +421,7 @@ class _WhatItDoes extends StatelessWidget {
         'Filters the news for you',
         'Not every immigration update needs your attention. Lumos scrapes '
             'all of it, then surfaces only the news that actually applies '
-            'to your situation — nothing more.',
+            'to your situation nothing unnecessary.',
         Icons.campaign_outlined,
         T.pastelMint,
       ),

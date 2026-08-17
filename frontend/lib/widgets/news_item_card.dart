@@ -101,6 +101,7 @@ class _NewsItemCardState extends State<NewsItemCard> {
   @override
   Widget build(BuildContext context) {
     final article = widget.item.item;
+    final personalizedSummary = widget.item.personalizedSummary;
 
     return MouseRegion(
       cursor: SystemMouseCursors.click,
@@ -134,8 +135,31 @@ class _NewsItemCardState extends State<NewsItemCard> {
                     overflow: TextOverflow.ellipsis,
                   ),
 
-                  // Summary (if available)
-                  if (article.summary.isNotEmpty) ...[
+                  // Personalized summary when Claude has written one for this
+                  // reader's situation; otherwise the raw scraped summary.
+                  if (personalizedSummary != null &&
+                      personalizedSummary.isNotEmpty) ...[
+                    const SizedBox(height: 8),
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Icon(
+                          Icons.auto_awesome,
+                          size: 13,
+                          color: T.signalBlue,
+                        ),
+                        const SizedBox(width: 6),
+                        Expanded(
+                          child: Text(
+                            personalizedSummary,
+                            style: AppTheme.bodySm,
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ] else if (article.summary.isNotEmpty) ...[
                     const SizedBox(height: 8),
                     Text(
                       article.summary,

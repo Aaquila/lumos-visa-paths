@@ -147,6 +147,10 @@ All configuration comes from the root `.env` file:
 | `INTAKE_MODEL` | `claude-opus-5` | Model for `POST /api/case/intake` |
 | `INTAKE_EFFORT` | `medium` | Reasoning effort — intake is a bounded classification, not open-ended research |
 | `INTAKE_RATE_LIMIT` | `12` | Intake requests per IP per 10 minutes |
+| `RELEVANCE_MODEL` | `claude-opus-5` | Model for the optional LLM wording refinement in `/api/news/relevant` |
+| `RELEVANCE_EFFORT` | `low` | Reasoning effort — a rewrite of an already-decided verdict |
+| `SUMMARY_MODEL` | `claude-opus-5` | Model for the personalized plain-language news summaries (uses `ANTHROPIC_API_KEY`; off without it) |
+| `SUMMARY_EFFORT` | `low` | Reasoning effort — rewriting an abstract in plain words, not reasoning about it |
 | `CORS_ORIGINS` | `*` | Comma-separated allowed origins |
 | `LOG_LEVEL` | `INFO` | Standard logging level |
 

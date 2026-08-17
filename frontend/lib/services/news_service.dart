@@ -221,8 +221,10 @@ class NewsService {
       }
 
       final data = jsonDecode(response.body) as Map<String, dynamic>;
+      // Backend key is `articles` (`AllNewsFeedResponse` in
+      // backend/app/models.py), not `items`.
       final items = [
-        for (final item in (data['items'] as List? ?? const []))
+        for (final item in (data['articles'] as List? ?? const []))
           NewsItemWithReadStatus.fromJson(
             (item as Map).cast<String, dynamic>(),
           ),
