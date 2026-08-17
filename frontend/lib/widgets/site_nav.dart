@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../services/auth_service.dart';
+import '../services/case_service.dart';
 import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
 import 'pill_button.dart';
@@ -288,10 +289,20 @@ class _NavLinkState extends State<_NavLink> {
 
 /// Neutral signed-in marker. Lumos holds no user-entered name, so the chip
 /// shows an avatar only — the Google account behind it lives in the tooltip.
+/// Tapping it opens the account menu: sign out, or switch to a different
+/// Google account.
 class _AccountChip extends StatelessWidget {
   const _AccountChip({required this.session});
 
   final UserSession session;
+
+  Future<void> _signOut(BuildContext context, {String destination = '/'}) async {
+    // The case is per-account and stays on disk; drop it from memory so the
+    // next sign-in starts from its own.
+    CaseService.instance.forget();
+    await AuthService.instance.signOut();
+    if (context.mounted) context.go(destination);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -305,22 +316,64 @@ class _AccountChip extends StatelessWidget {
       // Without a label this is a bare decorative circle to a screen reader —
       // the account it stands for lives only in the tooltip.
       child: Semantics(
-        label: detail,
-        child: Container(
-          padding: const EdgeInsets.all(4),
-          decoration: BoxDecoration(
-            border: Border.fromBorderSide(T.hairline),
-            borderRadius: BorderRadius.circular(T.rPill),
+        label: '$detail. Opens account menu.',
+        button: true,
+        child: PopupMenuButton<String>(
+          tooltip: '',
+          padding: EdgeInsets.zero,
+          offset: const Offset(0, 36),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(T.rInput),
           ),
-          child: Container(
-            width: 24,
-            height: 24,
-            decoration: const BoxDecoration(
-              color: T.pastelLavender,
-              shape: BoxShape.circle,
+          onSelected: (value) {
+            if (value == 'sign_out') _signOut(context);
+            if (value == 'switch_account') {
+              _signOut(context, destination: '/signin');
+            }
+          },
+          itemBuilder: (context) => [
+            PopupMenuItem(
+              enabled: false,
+              child: Text(session.email, style: AppTheme.caption),
             ),
-            alignment: Alignment.center,
-            child: const Icon(Icons.person_outline, size: 14, color: T.ink),
+            const PopupMenuDivider(),
+            const PopupMenuItem(
+              value: 'switch_account',
+              child: Row(
+                children: [
+                  Icon(Icons.switch_account_outlined, size: 18),
+                  SizedBox(width: T.s8),
+                  Text('Switch account'),
+                ],
+              ),
+            ),
+            const PopupMenuItem(
+              value: 'sign_out',
+              child: Row(
+                children: [
+                  Icon(Icons.logout, size: 18),
+                  SizedBox(width: T.s8),
+                  Text('Sign out'),
+                ],
+              ),
+            ),
+          ],
+          child: Container(
+            padding: const EdgeInsets.all(4),
+            decoration: BoxDecoration(
+              border: Border.fromBorderSide(T.hairline),
+              borderRadius: BorderRadius.circular(T.rPill),
+            ),
+            child: Container(
+              width: 24,
+              height: 24,
+              decoration: const BoxDecoration(
+                color: T.pastelLavender,
+                shape: BoxShape.circle,
+              ),
+              alignment: Alignment.center,
+              child: const Icon(Icons.person_outline, size: 14, color: T.ink),
+            ),
           ),
         ),
       ),
