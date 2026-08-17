@@ -1,10 +1,13 @@
 # Lumos backend
 
-FastAPI service. Currently implements two slices: the **news slice** — a daily
-scraper over a curated allow-list of official immigration sources — and **case
-intake**, which turns a person's description of their situation into a place on
-the pathway graph. The rest of the API surface is specified in
-[docs/API_ENDPOINTS.md](docs/API_ENDPOINTS.md) but not yet built.
+FastAPI service behind Lumos — the immigration assistant for neurodivergent
+and struggling brains. Currently implements two slices: the **news slice** —
+a daily scraper over a curated allow-list of official immigration sources,
+feeding the landing page's promise to track the latest updates and surface
+only what's relevant — and **case intake**, which turns a person's
+description of their situation into a place on the pathway graph. The rest of
+the API surface is specified in [docs/API_ENDPOINTS.md](docs/API_ENDPOINTS.md)
+but not yet built.
 
 ## Run it
 
