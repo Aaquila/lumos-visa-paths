@@ -35,6 +35,15 @@ services:
       - key: LOG_LEVEL
         value: INFO
       # Secrets — set these in the Render dashboard after the blueprint syncs.
+      #
+      # GOOGLE_AUTH_CLIENT_ID here and GOOGLE_CLIENT_ID on lumos-web below must
+      # be the SAME OAuth client. That client's Authorized JavaScript origins
+      # (Google Cloud Console > APIs & Services > Credentials) must include
+      # this live lumos-web URL, not just http://localhost:7357 from local
+      # dev — docs/RUNNING.md only walks through the localhost origin.
+      # Without the live origin added, every judge/visitor who clicks sign-in
+      # gets a Google origin_mismatch error; the app does not degrade to demo
+      # mode in that case, since the client ID itself is present and valid.
       - key: GOOGLE_AUTH_CLIENT_ID
         sync: false
       - key: GOOGLE_AUTH_CLIENT_SECRET
@@ -61,7 +70,10 @@ services:
       --dart-define=GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID
     staticPublishPath: build/web
     envVars:
-      # Same Google OAuth Web client ID as the backend's GOOGLE_AUTH_CLIENT_ID.
+      # Same Google OAuth Web client ID as the backend's GOOGLE_AUTH_CLIENT_ID
+      # above — see the note there on adding this service's live URL as an
+      # Authorized JavaScript origin on that OAuth client before sharing the
+      # link with judges/users.
       - key: GOOGLE_CLIENT_ID
         sync: false
     routes:

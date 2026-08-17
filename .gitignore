@@ -13,3 +13,9 @@ frontend/docs/*
 /UI_REVIEW_CHECKLIST.md
 /non_code
 /scripts
+/scripts
+/scripts
+scripts/run_web.sh
+scripts/run_web.ps1
+scripts/run_web.ps1
+scripts/run_web.sh
