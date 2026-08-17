@@ -1,23 +1,78 @@
-"""Persistence for scraped news.
+"""Persistence for scraped news and user data.
 
-SQLite, via the standard library. This is deliberately the smallest thing that
-survives a restart: Render's free tier recycles processes, and losing the feed
-on every deploy would make the daily cadence meaningless. When the Postgres
-schema in PROJECT_PRD §7a lands, `news_alerts` replaces this table and the
-`user_id` matching moves into SQL — the shapes here are already compatible.
+Database connection, session management, and schema creation. Supports both
+SQLite (local dev) and Postgres (production). Uses SQLAlchemy ORM for all
+models defined in `.models`.
+
+**Database selection:**
+- If `DATABASE_URL` env var is set, uses that connection string (Postgres)
+- Otherwise, falls back to SQLite at `backend/data/news.sqlite3`
+
+**Privacy rule, load-bearing.** Every table here holds *published government
+documents*, *shared user data* (news articles), or *our own scrape bookkeeping*.
+Nothing from `SituationInput` is written — the relevance endpoint scores a
+person's situation in memory and drops it with the response. If you find
+yourself adding a column, a table or a parameter that would hold what somebody
+told us about themselves, that is the change the product promised not to make —
+see the note above `POST /api/news/relevant` in `app/main.py`.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from .models import NewsItem, ScrapeReport, SourceInfo, utcnow
+from sqlalchemy import create_engine, event
+from sqlalchemy.orm import sessionmaker
+
+from .database import Base, utcnow
+from .models import (
+    DocumentMeta,
+    NewsItem,
+    ScrapeReport,
+    SourceInfo,
+)
 from .sources import SOURCES
 
 DB_PATH = Path(__file__).resolve().parent.parent / "data" / "news.sqlite3"
+
+# ── Database Engine and Session Management ────────────────────────────────────
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if DATABASE_URL:
+    # Production: use Postgres from environment
+    engine = create_engine(
+        DATABASE_URL,
+        echo=os.getenv("SQL_ECHO", "").lower() == "true",
+        pool_pre_ping=True,  # Test connections before using them
+    )
+else:
+    # Local dev: use SQLite
+    db_path = DB_PATH
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    engine = create_engine(
+        f"sqlite:///{db_path}",
+        echo=os.getenv("SQL_ECHO", "").lower() == "true",
+        connect_args={"check_same_thread": False},  # SQLite only
+    )
+
+    # SQLite: enable foreign keys on connection
+    @event.listens_for(engine, "connect")
+    def set_sqlite_pragma(dbapi_connection, _):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.close()
+
+
+# Create all tables on engine initialization
+Base.metadata.create_all(engine)
+
+# Session factory for ORM operations
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS news_items (
@@ -30,7 +85,8 @@ CREATE TABLE IF NOT EXISTS news_items (
     published_at  TEXT,
     first_seen_at TEXT NOT NULL,
     matched_nodes TEXT NOT NULL DEFAULT '[]',
-    tags          TEXT NOT NULL DEFAULT '[]'
+    tags          TEXT NOT NULL DEFAULT '[]',
+    meta          TEXT NOT NULL DEFAULT '{}'
 );
 CREATE INDEX IF NOT EXISTS idx_news_seen ON news_items(first_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_news_source ON news_items(source_id);
@@ -52,6 +108,23 @@ class NewsStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self._connect() as conn:
             conn.executescript(_SCHEMA)
+            self._migrate(conn)
+
+    @staticmethod
+    def _migrate(conn: sqlite3.Connection) -> None:
+        """Add columns a previously-created database is missing.
+
+        `CREATE TABLE IF NOT EXISTS` does nothing to an existing table, so a
+        database written before `meta` existed would otherwise fail every read
+        after a deploy. Adding the column is safe and idempotent; existing rows
+        get the default and simply carry no structured metadata until the next
+        scrape re-reads them.
+        """
+        existing = {r["name"] for r in conn.execute("PRAGMA table_info(news_items)")}
+        if "meta" not in existing:
+            conn.execute(
+                "ALTER TABLE news_items ADD COLUMN meta TEXT NOT NULL DEFAULT '{}'"
+            )
 
     def _connect(self) -> sqlite3.Connection:
         conn = sqlite3.connect(self.path)
@@ -73,8 +146,8 @@ class NewsStore:
                     """
                     INSERT OR IGNORE INTO news_items
                         (id, source_id, source_name, title, url, summary,
-                         published_at, first_seen_at, matched_nodes, tags)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                         published_at, first_seen_at, matched_nodes, tags, meta)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         item.id,
@@ -87,6 +160,7 @@ class NewsStore:
                         item.first_seen_at.isoformat(),
                         json.dumps(item.matched_nodes),
                         json.dumps(item.tags),
+                        item.meta.model_dump_json(),
                     ),
                 )
                 new += cursor.rowcount
@@ -115,6 +189,15 @@ class NewsStore:
 
     @staticmethod
     def _to_item(row: sqlite3.Row) -> NewsItem:
+        keys = row.keys()
+        raw_meta = row["meta"] if "meta" in keys else None
+        try:
+            meta = DocumentMeta.model_validate_json(raw_meta or "{}")
+        except ValueError:
+            # A metadata blob we cannot read is worth less than the item is; a
+            # story with no structured fields still belongs in the feed.
+            meta = DocumentMeta()
+
         return NewsItem(
             id=row["id"],
             source_id=row["source_id"],
@@ -130,6 +213,7 @@ class NewsStore:
             first_seen_at=datetime.fromisoformat(row["first_seen_at"]),
             matched_nodes=json.loads(row["matched_nodes"]),
             tags=json.loads(row["tags"]),
+            meta=meta,
         )
 
     def items(

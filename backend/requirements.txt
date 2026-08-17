@@ -3,6 +3,17 @@ uvicorn[standard]>=0.30,<1.0
 httpx>=0.27,<1.0
 beautifulsoup4>=4.12,<5.0
 pydantic>=2.7,<3.0
-# Case intake. Optional at runtime: with no ANTHROPIC_API_KEY the intake
-# endpoint falls back to keyword matching and says so.
+python-dotenv>=1.0,<2.0
+# Case intake, and the optional LLM polish on news relevance. Optional at
+# runtime: with no ANTHROPIC_API_KEY, intake falls back to keyword matching and
+# says so, and relevance scoring runs entirely on its deterministic path.
 anthropic>=0.75,<1.0
+# Google ID token verification. `[crypto]` pulls in `cryptography`, which is
+# what actually checks the RS256 signature against Google's JWKS — PyJWT alone
+# would parse the token without being able to verify it.
+pyjwt[crypto]>=2.9,<3.0
+# Scheduled tasks: weekday news scraper with timezone support.
+APScheduler>=3.10,<4.0
+# SQLAlchemy ORM for database persistence.
+sqlalchemy>=2.0,<3.0
+psycopg2-binary>=2.9,<3.0

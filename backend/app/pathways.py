@@ -26,7 +26,7 @@ _CANDIDATES = (
 
 
 class PathwayNode:
-    __slots__ = ("id", "name", "category", "description", "phase")
+    __slots__ = ("id", "name", "category", "description", "phase", "work_option", "source_hint")
 
     def __init__(self, raw: dict, phase: int) -> None:
         self.id: str = raw["id"]
@@ -34,6 +34,14 @@ class PathwayNode:
         self.category: str = raw.get("category", "")
         self.description: str = raw.get("description", "")
         self.phase = phase
+
+        #: Present on nodes that are also *recommendation options* — see the
+        #: `node.work_option` schema note in generic_pathways.json and the
+        #: ranking in `app/options.py`. Umbrella nodes (O-1, L-1, EB-1) carry
+        #: the block with an empty `goals` list so they are never offered on
+        #: their own alongside their own sub-categories.
+        self.work_option: dict = raw.get("work_option") or {}
+        self.source_hint: str = raw.get("source_hint", "")
 
     @property
     def family(self) -> str:
@@ -44,6 +52,12 @@ class PathwayGraph:
     def __init__(self, raw: dict) -> None:
         meta = raw.get("meta") or {}
         self.as_of: str = meta.get("as_of", "")
+        self.disclaimer: str = meta.get("disclaimer", "")
+
+        #: Cross-cutting guidance that belongs to no single node — parallel
+        #: filings, the routes that need no employer, how nationality changes
+        #: the option set. Served alongside any broad-goal option set.
+        self.strategy_notes: list[dict] = list(meta.get("strategy_notes") or [])
 
         # `meta.rollout_order` maps id patterns ("student.*", "temp_worker.h1b")
         # to a phase; phase 0 is what the product claims to model today.
@@ -68,6 +82,16 @@ class PathwayGraph:
 
     def has(self, node_id: str) -> bool:
         return node_id in self._by_id
+
+    def work_option(self, node_id: str) -> dict:
+        """The recommendation metadata for a node, or `{}` if it has none.
+
+        A node without one is a graph position that is not a route somebody can
+        choose (LPR, naturalization, the family categories), and it is simply
+        never offered as an option.
+        """
+        node = self._by_id.get(node_id)
+        return node.work_option if node else {}
 
     @property
     def ids(self) -> list[str]:

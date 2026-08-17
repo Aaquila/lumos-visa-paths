@@ -19,13 +19,13 @@ import asyncio
 import logging
 import re
 import urllib.robotparser
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from urllib.parse import urljoin, urlparse
 
 import httpx
 from bs4 import BeautifulSoup
 
-from .models import NewsItem, ScrapeReport, utcnow
+from .models import DocumentMeta, NewsItem, ScrapeReport, utcnow
 from .sources import FEDERAL_REGISTER_API, NODE_KEYWORDS, SOURCES, Source
 
 log = logging.getLogger("pathfinder.scraper")
@@ -77,6 +77,54 @@ def parse_date(text: str) -> datetime | None:
         except ValueError:
             continue
     return None
+
+
+def _iso_date(raw: object) -> date | None:
+    """A `YYYY-MM-DD` string from the API, or None. Never a guess."""
+    if not isinstance(raw, str) or not raw:
+        return None
+    try:
+        return datetime.strptime(raw[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _agency_slugs(raw: object) -> list[str]:
+    """Agency slugs out of the API's `agencies` array.
+
+    The array holds objects (`{"slug": ..., "name": ...}`), but the field has
+    been served as bare strings before now, so both are accepted rather than
+    letting a shape change empty the metadata silently.
+    """
+    slugs: list[str] = []
+    for entry in raw if isinstance(raw, list) else []:
+        if isinstance(entry, dict):
+            slug = entry.get("slug") or entry.get("raw_name") or entry.get("name")
+        else:
+            slug = entry
+        if isinstance(slug, str) and slug:
+            slugs.append(slug)
+    return slugs
+
+
+def _cfr_references(raw: object) -> list[str]:
+    """`[{"title": 8, "part": 214}]` → `["8 CFR 214"]`.
+
+    Which CFR part a rule amends is the closest thing the record has to "who
+    does this reach": 8 CFR 214 is nonimmigrant classifications, 8 CFR 274a is
+    employment authorisation, 8 CFR 204 is immigrant petitions.
+    """
+    refs: list[str] = []
+    for entry in raw if isinstance(raw, list) else []:
+        if isinstance(entry, dict):
+            title, part = entry.get("title"), entry.get("part")
+            if title and part:
+                refs.append(f"{title} CFR {part}")
+            elif title:
+                refs.append(f"{title} CFR")
+        elif isinstance(entry, str) and entry:
+            refs.append(entry)
+    return refs
 
 
 def match_nodes(source: Source, title: str, summary: str) -> list[str]:
@@ -195,6 +243,17 @@ class Scraper:
                     "html_url",
                     "type",
                     "document_number",
+                    # Structured metadata, asked for explicitly because the API
+                    # only returns the fields you name. Relevance scoring reads
+                    # these rather than guessing at the prose — a final rule
+                    # amending 8 CFR 214 with an effective date is a different
+                    # thing from a meeting notice, and only these fields say so.
+                    "action",
+                    "agencies",
+                    "docket_ids",
+                    "cfr_references",
+                    "effective_on",
+                    "comments_close_on",
                 )
             ],
         ]
@@ -223,6 +282,18 @@ class Scraper:
                     published = None
 
             doc_type = result.get("type") or ""
+            meta = DocumentMeta(
+                document_type=doc_type,
+                document_number=str(result.get("document_number") or ""),
+                action=str(result.get("action") or "")[:300],
+                agencies=_agency_slugs(result.get("agencies")),
+                docket_ids=[
+                    str(d) for d in (result.get("docket_ids") or []) if d
+                ],
+                cfr_references=_cfr_references(result.get("cfr_references")),
+                effective_on=_iso_date(result.get("effective_on")),
+                comments_close_on=_iso_date(result.get("comments_close_on")),
+            )
             items.append(
                 NewsItem(
                     id=NewsItem.make_id(source.id, url, title),
@@ -236,6 +307,7 @@ class Scraper:
                     tags=[*source.tags, doc_type.lower().replace(" ", "-")]
                     if doc_type
                     else list(source.tags),
+                    meta=meta,
                 )
             )
         return items

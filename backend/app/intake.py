@@ -26,6 +26,7 @@ import os
 import re
 
 from .models import IntakeFact, IntakeQuestion, IntakeRequest, IntakeResult
+from .options import DISCLAIMER, build_option_set, detect_goal
 from .pathways import PathwayGraph, load_graph
 
 log = logging.getLogger("pathfinder.intake")
@@ -57,9 +58,15 @@ identify one status clearly, return "unknown" and ask a question instead of \
 guessing. A confident wrong status is worse than an honest question.
 - `goal_node_id` is where they said they want to be. Most people describe a \
 situation without naming a destination — return "unknown" rather than \
-inferring an ambition they did not express. A goal that is a general direction \
-("a green card through my job") maps to the closest node plus \
-`alternative_goal_ids` for the other routes that fit.
+inferring an ambition they did not express.
+- A *direction* is not a destination. "I want to work in the US" names no \
+single status, and answering it with one is actively misleading: it is how a \
+person comes away believing H-1B is the only route. When the stated aim is \
+broad, return "unknown" for `goal_node_id` and list EVERY route that could \
+serve it in `alternative_goal_ids` — employer-sponsored and self-petitioned, \
+temporary and permanent. The ranked, bucketed option set is built \
+deterministically from those ids downstream, so a short list here throws away \
+options the person needed to see. Never narrow a broad aim to one answer.
 - `facts` are things the person actually stated, in their terms, not \
 inferences. Keep labels short.
 - `questions` are the things you would need answered to raise your confidence. \
@@ -229,6 +236,12 @@ def keyword_resolve(request: IntakeRequest, graph: PathwayGraph) -> IntakeResult
     if goal == current:
         goal = None
 
+    # A *direction* ("I want to work in the US") is not a missing goal — it is a
+    # goal that no single node answers. Detecting it here is what stops the
+    # fallback asking "where would you like to end up?" at somebody who just
+    # said, and then answering with one status.
+    broad_goal = detect_goal(text, request.goal)
+
     questions: list[IntakeQuestion] = []
     if current is None:
         questions.append(
@@ -239,7 +252,7 @@ def keyword_resolve(request: IntakeRequest, graph: PathwayGraph) -> IntakeResult
                 type="text",
             )
         )
-    if goal is None:
+    if goal is None and broad_goal is None:
         questions.append(
             IntakeQuestion(
                 id="q_goal_name",
@@ -255,7 +268,7 @@ def keyword_resolve(request: IntakeRequest, graph: PathwayGraph) -> IntakeResult
         else "Nothing in your description named a status this could match."
     )
 
-    return IntakeResult(
+    result = IntakeResult(
         current_node_id=current,
         current_confidence="low",
         goal_node_id=goal,
@@ -267,6 +280,36 @@ def keyword_resolve(request: IntakeRequest, graph: PathwayGraph) -> IntakeResult
         "check it against the map before relying on it.",
         source="keywords",
     )
+    return attach_options(result, request, graph, goal=broad_goal)
+
+
+def attach_options(
+    result: IntakeResult,
+    request: IntakeRequest,
+    graph: PathwayGraph,
+    goal: str | None = None,
+) -> IntakeResult:
+    """Hang the full ranked option set off a result, when the goal was broad.
+
+    Both resolvers go through here, so the reasoner and the keyword fallback
+    return the same shape. Nothing about the single-node fields changes — the
+    option set is additive, and absent when the person named a specific
+    destination.
+    """
+    result.disclaimer = result.disclaimer or DISCLAIMER
+    if result.options is None:
+        result.options = build_option_set(
+            graph, request.text, request.goal, goal=goal
+        )
+    if result.options is not None and not result.explanation.startswith("There is"):
+        goal_label = result.options.goal_label.lower()
+        result.explanation = (
+            f"There is more than one route to this. {result.explanation} "
+            f"Below are {len(result.options.options)} routes that can lead to "
+            f"{goal_label}, ranked by how well they fit what you have told us "
+            "— including several that need no employer sponsor."
+        ).strip()
+    return result
 
 
 # ── Reasoner ──────────────────────────────────────────────────────────────────
@@ -302,7 +345,8 @@ class IntakeResolver:
             return result
 
         try:
-            return await self._resolve_with_model(request)
+            result = await self._resolve_with_model(request)
+            return attach_options(result, request, self.graph)
         except Exception:  # noqa: BLE001
             # A person mid-intake gets the weaker answer rather than a 500.
             log.exception("intake reasoner failed; falling back to keywords")
@@ -370,11 +414,14 @@ class IntakeResolver:
             ),
             goal_node_id=goal,
             goal_confidence=data.get("goal_confidence", "low") if goal else "low",
+            # Not truncated to a handful any more. A broad goal legitimately
+            # has a dozen routes, and cutting the list here was half of why
+            # "I want to work in the US" came back as H-1B and nothing else.
             alternative_goal_ids=[
                 n
                 for n in data.get("alternative_goal_ids") or []
                 if self.graph.has(n) and n != goal
-            ][:3],
+            ],
             facts=[
                 IntakeFact(label=str(f.get("label", "")), value=str(f.get("value", "")))
                 for f in (data.get("facts") or [])
