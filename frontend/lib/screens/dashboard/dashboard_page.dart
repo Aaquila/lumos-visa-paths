@@ -20,6 +20,7 @@ import '../../widgets/news_notification_bar.dart';
 import '../../widgets/pill_button.dart';
 import '../../widgets/site_footer.dart';
 import '../../widgets/site_nav.dart';
+import '../../widgets/voice_assistant_panel.dart';
 import '../evidence/evidence_scaffold.dart' show EvidenceLoader;
 import '../landing/landing_mockups.dart';
 
@@ -92,6 +93,13 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
 
     return Scaffold(
       backgroundColor: T.paper,
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: () => showVoiceAssistantSheet(context),
+        icon: const Icon(Icons.mic_none),
+        label: const Text('Ask Lumos'),
+        backgroundColor: T.signalBlue,
+        foregroundColor: T.paper,
+      ),
       body: AnimatedBuilder(
         // Sign-in state and the case can both change from elsewhere.
         animation: Listenable.merge([

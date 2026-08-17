@@ -133,13 +133,26 @@ class UserNews(Base):
     article_id = Column(String(256), ForeignKey("news_articles.id"), nullable=False)
     is_unread = Column(Boolean, default=True, nullable=False, index=True)
     relevance_reason = Column(Text, default="", nullable=False)
+
+    #: One of `relevance.AFFECTS_YOU` / `WORTH_KNOWING` — `BACKGROUND` matches
+    #: never get a `UserNews` row at all, so this column is never that value.
+    #: Lets the client filter "affects you" from "worth knowing" without the
+    #: server re-deriving it.
+    relevance_level = Column(String(32), default="worth_knowing", nullable=False)
+
     marked_read_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False, index=True)
 
-    #: Claude-written plain-language explanation of this article, personalized
-    #: to the user's own status/goal text. Null until generated (see
-    #: `app.summarizer`); a null value means "not generated yet or generation
-    #: failed", not "nothing to say" — callers fall back to `NewsArticle.summary`.
+    #: Claude-written one-line "what this means for you" headline, personalized
+    #: to the user's own status/goal text — or the literal
+    #: `summarizer.NOT_RELEVANT_HEADLINE` when the document doesn't touch their
+    #: situation. Null until generated (see `app.summarizer`); a null value
+    #: means "not generated yet or generation failed", not "nothing to say" —
+    #: callers fall back to `NewsArticle.title`.
+    personalized_headline = Column(Text, nullable=True)
+
+    #: The plain-language explanation behind `personalized_headline`. Null
+    #: until generated; callers fall back to `NewsArticle.summary`.
     personalized_summary = Column(Text, nullable=True)
     summary_generated_at = Column(DateTime(timezone=True), nullable=True)
 
@@ -190,7 +203,9 @@ def init_db() -> None:
             }
             for column, ddl_type in (
                 ("personalized_summary", "TEXT"),
+                ("personalized_headline", "TEXT"),
                 ("summary_generated_at", "DATETIME"),
+                ("relevance_level", "VARCHAR(32) NOT NULL DEFAULT 'worth_knowing'"),
             ):
                 if column not in existing:
                     conn.exec_driver_sql(

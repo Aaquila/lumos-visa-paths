@@ -480,10 +480,20 @@ class UserNewsArticle(BaseModel):
     marked_read_at: datetime | None = None
     is_unread: bool = True
 
-    #: Claude-written plain-language explanation personalized to this user's
-    #: situation. `None` when not yet generated (no API key, generation
-    #: failed, or the article predates this feature) — the client falls back
-    #: to `summary`.
+    #: `relevance.AFFECTS_YOU` or `WORTH_KNOWING` — never `BACKGROUND`, since
+    #: those never get a `UserNews` row. Lets the client filter to items that
+    #: name the reader's own status/form/country, not just anything adjacent.
+    relevance_level: str = "worth_knowing"
+
+    #: Claude-written one-line "what this means for you" headline — or the
+    #: literal `summarizer.NOT_RELEVANT_HEADLINE` when the document doesn't
+    #: touch this reader's situation. `None` when not yet generated (no API
+    #: key, generation failed, or the article predates this feature) — the
+    #: client falls back to `title`.
+    personalized_headline: str | None = None
+
+    #: The plain-language explanation behind `personalized_headline`. `None`
+    #: under the same conditions — the client falls back to `summary`.
     personalized_summary: str | None = None
 
 
@@ -508,3 +518,144 @@ class MarkReadResponse(BaseModel):
 
     status: str
     marked_read_at: datetime | None
+
+
+class SaveSituationRequest(BaseModel):
+    """`POST /api/user/situation` — the one place a situation is persisted.
+
+    Contrast with `SituationInput`: that one is scored in memory and dropped
+    with the response. This one is written to `UserVisaSituation` and read
+    back by `personalize_articles` on every scrape, because matching news to
+    a person's situation after the fact requires having it later. Same two
+    free-text fields, on purpose — this is what a person confirmed as their
+    status and goal, not a new shape to reconcile.
+    """
+
+    status_text: str = Field(min_length=1, max_length=2000)
+    goal_text: str = Field(default="", max_length=2000)
+
+
+class SavedSituation(BaseModel):
+    """The authenticated user's currently recorded situation, or absence of one."""
+
+    status_text: str = ""
+    goal_text: str = ""
+    updated_at: datetime | None = None
+
+    #: False when the user has never saved a situation — distinguishes "no
+    #: situation recorded" from "recorded empty text".
+    has_situation: bool = False
+
+
+class SaveSituationResponse(BaseModel):
+    """Response for POST /api/user/situation."""
+
+    status: str
+    updated_at: datetime
+
+
+# ── Voice assistant ──────────────────────────────────────────────────────────
+
+
+class VoiceTranscript(BaseModel):
+    """`POST /api/voice/transcribe` — the response shape.
+
+    The uploaded audio itself is never written anywhere; it is handed to
+    ElevenLabs for transcription and dropped once this comes back.
+    """
+
+    transcript: str
+
+
+class VoiceAssistantTurn(BaseModel):
+    """One earlier turn of the conversation, kept in the browser only.
+
+    The client resends the last few turns with each request so the assistant
+    has context; nothing here is persisted server-side between requests.
+    """
+
+    #: user | assistant
+    role: str
+    text: str = Field(max_length=2000)
+
+
+class VoiceDeadlineContext(BaseModel):
+    """One deadline as the client currently sees it — enough for the
+    assistant to refer to it and to target it with an action, no more.
+
+    Mirrors the frontend's `Deadline` model loosely; only the fields the
+    assistant actually needs to reason about or act on.
+    """
+
+    id: str
+    title: str
+    description: str = ""
+    due_date: date | None = None
+    is_approximate: bool = False
+    severity: str = "important"
+    source: str = "user-added"
+
+
+class VoiceCaseContext(BaseModel):
+    """The person's current status/goal, in their own words, as the client
+    holds it locally. Never stored server-side — same rule as
+    `SituationInput` above."""
+
+    current_status_text: str = Field(default="", max_length=2000)
+    goal_text: str = Field(default="", max_length=1000)
+
+
+class VoiceAssistantRequest(BaseModel):
+    """`POST /api/voice/assistant` — a transcript plus just enough context.
+
+    Everything here is per-request only. The case and deadline snapshots are
+    exactly what the caller already holds client-side; the backend does not
+    look any of it up and does not remember it after the response is sent.
+    """
+
+    transcript: str = Field(min_length=1, max_length=2000)
+    history: list[VoiceAssistantTurn] = Field(default_factory=list, max_length=12)
+    case: VoiceCaseContext = Field(default_factory=VoiceCaseContext)
+    deadlines: list[VoiceDeadlineContext] = Field(default_factory=list, max_length=100)
+
+
+class VoiceAssistantAction(BaseModel):
+    """One proposed change to the deadline list.
+
+    A *proposal* only — like `IntakeResult`, nothing here is applied on the
+    backend. The client is the one holding `DeadlineService`, so it executes
+    each action itself via the same methods a person's own tap would call.
+    """
+
+    #: add_deadline | dismiss_deadline | restore_deadline | snooze_deadline
+    kind: str
+
+    #: Present for dismiss/restore/snooze — the id of the existing deadline.
+    target_id: str | None = None
+
+    #: Present for add_deadline.
+    title: str | None = None
+    description: str | None = None
+    next_action: str | None = None
+    due_date: date | None = None
+    is_approximate: bool = False
+
+    #: Present for snooze_deadline.
+    until: date | None = None
+
+
+class VoiceAssistantResponse(BaseModel):
+    """`POST /api/voice/assistant` — the reply and what it proposes to change."""
+
+    reply_text: str
+    actions: list[VoiceAssistantAction] = Field(default_factory=list)
+
+    #: Set when the reasoner could not be reached and a canned reply was used
+    #: instead — mirrors `IntakeResult.degraded`.
+    degraded: bool = False
+
+
+class VoiceSpeakRequest(BaseModel):
+    """`POST /api/voice/speak` — text in, spoken audio out."""
+
+    text: str = Field(min_length=1, max_length=600)

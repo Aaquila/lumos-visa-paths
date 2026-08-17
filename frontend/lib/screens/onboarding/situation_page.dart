@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../models/onboarding_profile.dart';
 import '../../services/auth_service.dart';
+import '../../services/situation_service.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/pill_button.dart';
@@ -84,6 +85,11 @@ class _SituationPageState extends State<SituationPage> {
 
   Future<void> _finish() async {
     await AuthService.instance.saveSituation(_current);
+    // Best-effort mirror to the backend — this is what personalized news
+    // scores against. Never blocks navigation: the local save above already
+    // succeeded, and a signed-out/demo/offline caller just keeps the public
+    // feed, same as everywhere else the backend is optional.
+    unawaited(SituationService.instance.save(_current));
     if (!mounted) return;
     context.go('/dashboard');
   }

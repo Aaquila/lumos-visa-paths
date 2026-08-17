@@ -89,25 +89,33 @@ class PastelIconBadge extends StatelessWidget {
 }
 
 /// Small hairline pill used for social proof and inline metadata.
+///
+/// Pass [onTap] to make it a selectable chip (e.g. "also fits" alternatives
+/// that the person can tap to swap in as their goal) instead of pure
+/// decoration.
 class MetaPill extends StatelessWidget {
   const MetaPill({
     super.key,
     required this.label,
     this.icon,
     this.iconColor = T.signalBlue,
+    this.onTap,
   });
 
   final String label;
   final IconData? icon;
   final Color iconColor;
+  final VoidCallback? onTap;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
+    final pill = Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
         color: T.paper,
-        border: Border.fromBorderSide(T.hairline),
+        border: Border.fromBorderSide(
+          onTap != null ? T.hairline.copyWith(color: T.signalBlue) : T.hairline,
+        ),
         borderRadius: BorderRadius.circular(T.rPill),
       ),
       child: MergeSemantics(
@@ -134,6 +142,13 @@ class MetaPill extends StatelessWidget {
           ],
         ),
       ),
+    );
+
+    if (onTap == null) return pill;
+
+    return MouseRegion(
+      cursor: SystemMouseCursors.click,
+      child: GestureDetector(onTap: onTap, child: pill),
     );
   }
 }

@@ -48,6 +48,7 @@ class _IntakePageState extends State<IntakePage> {
 
   final _situation = TextEditingController();
   final _goal = TextEditingController();
+  final _clarify = TextEditingController();
   bool _busy = false;
   String? _error;
 
@@ -80,6 +81,7 @@ class _IntakePageState extends State<IntakePage> {
   void dispose() {
     _situation.dispose();
     _goal.dispose();
+    _clarify.dispose();
     super.dispose();
   }
 
@@ -213,6 +215,42 @@ class _IntakePageState extends State<IntakePage> {
     });
   }
 
+  /// Swaps a listed "also fits" alternative in as the goal, and puts the
+  /// previous goal back on the alternatives list so the swap is reversible.
+  void _selectGoal(String nodeId) {
+    final result = _result;
+    if (result == null || nodeId == result.goalNodeId) return;
+    setState(() {
+      final previous = result.goalNodeId;
+      _result = result.copyWith(
+        goalNodeId: nodeId,
+        goalConfidence: 'high',
+        alternativeGoalIds: [
+          ?previous,
+          for (final id in result.alternativeGoalIds) if (id != nodeId) id,
+        ],
+      );
+    });
+  }
+
+  /// Answers the "still open" questions in free text and re-resolves rather
+  /// than starting over — the person already got most of the way there.
+  Future<void> _submitClarification() async {
+    final addition = _clarify.text.trim();
+    if (addition.isEmpty) return;
+
+    final combined = [
+      _situation.text.trim(),
+      addition,
+    ].where((s) => s.isNotEmpty).join('. ');
+
+    setState(() {
+      _situation.text = combined;
+      _clarify.clear();
+    });
+    await _submitDescription();
+  }
+
   // ── Build ─────────────────────────────────────────────────────────────────
 
   @override
@@ -267,8 +305,6 @@ class _IntakePageState extends State<IntakePage> {
                               ),
                               const SizedBox(height: T.s32),
                               ..._body(context, snapshot.data),
-                              const SizedBox(height: T.s32),
-                              const LegalDisclaimer(),
                             ],
                           ),
                         ),
@@ -295,6 +331,11 @@ class _IntakePageState extends State<IntakePage> {
           onAccept: () => _accept(result),
           onRedo: () => _restart(mode: _Mode.questions),
           onNarrowO1: _narrowO1,
+          onSelectGoal: _selectGoal,
+          clarifyController: _clarify,
+          busy: _busy,
+          onClarify: _submitClarification,
+          clarifyError: _error,
         ),
       ];
     }
@@ -774,6 +815,11 @@ class _ResultCard extends StatelessWidget {
     required this.onAccept,
     required this.onRedo,
     required this.onNarrowO1,
+    required this.onSelectGoal,
+    required this.clarifyController,
+    required this.busy,
+    required this.onClarify,
+    this.clarifyError,
   });
 
   final CaseProfile profile;
@@ -781,6 +827,14 @@ class _ResultCard extends StatelessWidget {
   final VoidCallback onAccept;
   final VoidCallback onRedo;
   final ValueChanged<String> onNarrowO1;
+
+  /// Swaps an "also fits" alternative in as the goal.
+  final ValueChanged<String> onSelectGoal;
+
+  final TextEditingController clarifyController;
+  final bool busy;
+  final VoidCallback onClarify;
+  final String? clarifyError;
 
   bool get _needsO1Category =>
       profile.currentNodeId == 'extraordinary.o1' ||
@@ -831,8 +885,9 @@ class _ResultCard extends StatelessWidget {
           accent: T.voltageViolet,
           alternatives: [
             for (final id in profile.alternativeGoalIds)
-              graph?.node(id)?.name ?? id,
+              (id: id, name: graph?.node(id)?.name ?? id),
           ],
+          onSelectAlternative: onSelectGoal,
         ),
 
         if (profile.explanation.isNotEmpty) ...[
@@ -860,6 +915,25 @@ class _ResultCard extends StatelessWidget {
                   _Note(icon: Icons.help_outline, text: q),
                   const SizedBox(height: T.s8),
                 ],
+                const SizedBox(height: T.s8),
+                _Field(
+                  controller: clarifyController,
+                  hint: 'Answer any of the above in your own words.',
+                  maxLines: 3,
+                  enabled: !busy,
+                  voiceLabel: 'your answer',
+                ),
+                if (clarifyError != null) ...[
+                  const SizedBox(height: T.s8),
+                  _Note(icon: Icons.error_outline, text: clarifyError!),
+                ],
+                const SizedBox(height: T.s8),
+                PillButton(
+                  label: busy ? 'Updating…' : 'Update my answer',
+                  icon: Icons.check,
+                  busy: busy,
+                  onPressed: busy ? null : onClarify,
+                ),
               ],
             ),
           ),
@@ -974,6 +1048,7 @@ class _NodeCard extends StatelessWidget {
     required this.emptyText,
     required this.accent,
     this.alternatives = const [],
+    this.onSelectAlternative,
   });
 
   final String label;
@@ -981,7 +1056,12 @@ class _NodeCard extends StatelessWidget {
   final String confidence;
   final String emptyText;
   final Color accent;
-  final List<String> alternatives;
+  final List<({String id, String name})> alternatives;
+
+  /// Taps an "also fits" pill to swap it in as the goal. Null leaves the
+  /// pills as pure decoration (used for the current-status card, which has
+  /// no alternatives).
+  final ValueChanged<String>? onSelectAlternative;
 
   @override
   Widget build(BuildContext context) {
@@ -1037,7 +1117,13 @@ class _NodeCard extends StatelessWidget {
               spacing: 6,
               runSpacing: 6,
               children: [
-                for (final name in alternatives) MetaPill(label: name),
+                for (final alt in alternatives)
+                  MetaPill(
+                    label: alt.name,
+                    onTap: onSelectAlternative == null
+                        ? null
+                        : () => onSelectAlternative!(alt.id),
+                  ),
               ],
             ),
           ],

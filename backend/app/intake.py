@@ -70,7 +70,12 @@ options the person needed to see. Never narrow a broad aim to one answer.
 - `facts` are things the person actually stated, in their terms, not \
 inferences. Keep labels short.
 - `questions` are the things you would need answered to raise your confidence. \
-Ask at most three, and only ones that would change the answer.
+Ask at most three, and only ones that would change the answer. When the goal is \
+broad and the routes it could resolve to depend on what the person actually \
+does — O-1A vs O-1B, H-1B specialty occupation, EB-1A, NIW, and similar — ask \
+what their field, profession, or occupation is. That question narrows a broad \
+goal more than visa-mechanical details (program dates, degree classification, \
+citizenship) do, so include it rather than crowding it out with those.
 - `explanation` is two or three plain sentences addressed to the person, saying \
 where you placed them and why. No legal advice, no predictions about whether an \
 application will succeed, no invented deadlines or fee amounts.
@@ -257,6 +262,18 @@ def keyword_resolve(request: IntakeRequest, graph: PathwayGraph) -> IntakeResult
             IntakeQuestion(
                 id="q_goal_name",
                 text="Where would you like to end up?",
+                type="text",
+            )
+        )
+    # A broad goal ("work in the US") resolves to a list that spans routes
+    # gated by what the person does — O-1A vs O-1B, H-1B specialty occupation,
+    # EB-1A, NIW. That narrows the list more than any visa-mechanical detail,
+    # so it belongs here even though no keyword pattern can answer it.
+    if goal is None and broad_goal is not None:
+        questions.append(
+            IntakeQuestion(
+                id="q_field",
+                text="What is your field, profession, or occupation?",
                 type="text",
             )
         )

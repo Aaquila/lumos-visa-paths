@@ -242,8 +242,6 @@ class _DeadlinesPageState extends State<DeadlinesPage> {
                                       Deadline.disclaimer,
                                       style: AppTheme.caption,
                                     ),
-                                    const SizedBox(height: T.s16),
-                                    const LegalDisclaimer(compact: true),
                                   ],
                                 ),
                               ),

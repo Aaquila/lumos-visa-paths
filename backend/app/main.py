@@ -5,18 +5,24 @@ the news endpoints and the daily scraper that fills them. Everything else in
 that document (case intake persistence, compliance, chat, evidence) is still
 spec.
 
-Two things about identity here, both deliberate:
+Two things about identity here:
 
 * **Tokens are verified, not trusted.** A caller may present a Google ID token.
   If they do, it is verified properly — RS256 signature against Google's JWKS,
   `aud` equal to the configured client id, a Google `iss`, and an unexpired
   `exp` — and a bad one is a 401 rather than a shrug. Endpoints that read a
-  person's own situation use `optional_caller`, so they work signed-out and are
-  never fooled by a forged header.
-* **Nothing about a caller is stored.** There is no user table, no session
-  table, and no row anywhere keyed by a person. Verification is stateless: the
-  claim is used for the length of the request and dropped. Tokens, emails and
-  free-text situations are never logged.
+  person's own situation *for scoring only* (`/api/news/relevant`,
+  `/api/case/intake`) use `optional_caller`, so they work signed-out, are never
+  fooled by a forged header, and never persist what's sent — the situation
+  travels in the request body and is dropped with the response.
+* **The one deliberate exception is the personalized-news feature.**
+  `/api/user/news/*` and `/api/user/situation` are keyed by identity: a valid
+  Google ID token auto-registers a `User` row (`required_user`, `id` = the
+  token's `sub` — there is no separate signup step), and `POST
+  /api/user/situation` is the one place a person's status/goal text is
+  persisted server-side, because matching news to it after the fact requires
+  having it later. Nothing else in this file stores a caller's situation.
+  Emails are never read from the token and never stored anywhere.
 
 Run it:
     cd backend
@@ -36,8 +42,9 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 import jwt
-from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
 from .intake import MODEL as INTAKE_MODEL
@@ -52,21 +59,43 @@ from .models import (
     PathwayOptionSet,
     PersonalisedNewsFeed,
     RelevantNewsItem,
+    SaveSituationRequest,
+    SaveSituationResponse,
+    SavedSituation,
     ScrapeReport,
     SituationInput,
     SourceInfo,
     UnreadNewsFeedResponse,
     UserNewsArticle,
+    VoiceAssistantRequest,
+    VoiceAssistantResponse,
+    VoiceSpeakRequest,
+    VoiceTranscript,
 )
 from .options import GOALS, build_option_set
-from .personalization import personalize_articles
+from .personalization import (
+    sync_scraped_articles,
+    personalize_articles,
+    ensure_personalized_summaries,
+    refresh_relevance_levels,
+)
 from .relevance import DISCLAIMER as RELEVANCE_DISCLAIMER
 from .relevance import RelevanceScorer, counts
 from .scheduler import scheduler, register_scraper_job
 from .scraper import Scraper
 from .store import NewsStore
 from .summarizer import PersonalizedSummarizer
-from .database import init_db, get_db, User, UserVisaSituation, NewsArticle, UserNews, UserPreferences
+from .voice import ElevenLabsClient, ElevenLabsError, VoiceAssistant
+from .database import (
+    init_db,
+    get_db,
+    utcnow,
+    User,
+    UserVisaSituation,
+    NewsArticle,
+    UserNews,
+    UserPreferences,
+)
 
 # Load .env from the repo root before any os.getenv calls.
 _env_path = Path(__file__).parent.parent.parent / '.env'
@@ -91,6 +120,8 @@ scraper = Scraper()
 intake_resolver = IntakeResolver()
 relevance_scorer = RelevanceScorer()
 personalized_summarizer = PersonalizedSummarizer()
+elevenlabs_client = ElevenLabsClient()
+voice_assistant = VoiceAssistant()
 
 
 # ── Google ID token verification ──────────────────────────────────────────────
@@ -233,14 +264,37 @@ async def optional_caller(
     return verify_google_id_token(token.strip())
 
 
+def _get_or_create_user(db: Session, subject: str) -> User:
+    """The authenticated caller's row, creating it on first sight.
+
+    There is no separate registration step — presenting a valid Google ID
+    token *is* registration. `id` is the token's `sub` claim directly (see
+    `User`'s docstring in `database.py`), so this is a plain upsert keyed on
+    it, not a lookup that can fail: every valid token has a row after this
+    returns. Refreshes `last_signin` either way.
+    """
+    now = utcnow()
+    user = db.query(User).filter(User.id == subject).first()
+    if user is None:
+        user = User(id=subject, created_at=now, last_signin=now)
+        db.add(user)
+    else:
+        user.last_signin = now
+    db.commit()
+    db.refresh(user)
+    return user
+
+
 async def required_user(
     authorization: str | None = Header(default=None),
     db: Session = Depends(get_db),
 ) -> User:
-    """Verify token and return the authenticated user.
+    """Verify token and return the authenticated user, auto-registering them.
 
-    Unlike optional_caller, this requires a valid token and that the user
-    exists in the database. Returns a User model or raises 401.
+    Unlike optional_caller, this requires a valid token. There is no separate
+    signup flow: a first-time valid token creates the `User` row on the spot
+    (see `_get_or_create_user`) rather than 401ing until some other endpoint
+    registers them — there is no other endpoint that would.
     """
     if authorization is None:
         raise HTTPException(
@@ -256,44 +310,61 @@ async def required_user(
         )
 
     subject = verify_google_id_token(token.strip())
+    return _get_or_create_user(db, subject)
 
-    # Look up user by Google subject claim
-    user = db.query(User).filter(User.sub == subject).first()
-    if user is None:
-        raise HTTPException(
-            status_code=401,
-            detail="User not yet registered",
-        )
-    return user
-
-#: Intake is the one LLM-backed endpoint here and it is unauthenticated, so it
-#: gets a cheap per-IP fixed window (PROJECT_PRD §4 asks for a rate limit on
-#: exactly this set). A dict is enough for a single-process demo service; when
-#: this moves behind a session it becomes a per-user limit in the store.
+#: Intake and the voice endpoints are the LLM/ElevenLabs-backed endpoints here
+#: and are unauthenticated, so each gets a cheap per-IP fixed window (PROJECT_PRD
+#: §4 asks for a rate limit on exactly this set). Buckets are separate dicts, all
+#: driven through the one helper below. A dict is enough for a single-process
+#: demo service; when this moves behind a session it becomes a per-user limit in
+#: the store.
 INTAKE_LIMIT = int(os.getenv("INTAKE_RATE_LIMIT", "12"))
 INTAKE_WINDOW = timedelta(minutes=10)
 _intake_hits: dict[str, list[datetime]] = {}
 
+VOICE_LIMIT = int(os.getenv("VOICE_RATE_LIMIT", "30"))
+VOICE_WINDOW = timedelta(minutes=10)
+_voice_hits: dict[str, list[datetime]] = {}
 
-def _rate_limit_intake(client_ip: str) -> None:
+
+def _rate_limited(
+    bucket: dict[str, list[datetime]],
+    client_ip: str,
+    *,
+    limit: int,
+    window: timedelta,
+    label: str,
+) -> None:
     now = datetime.now(timezone.utc)
-    cutoff = now - INTAKE_WINDOW
-    hits = [t for t in _intake_hits.get(client_ip, []) if t > cutoff]
-    if len(hits) >= INTAKE_LIMIT:
+    cutoff = now - window
+    hits = [t for t in bucket.get(client_ip, []) if t > cutoff]
+    if len(hits) >= limit:
         raise HTTPException(
             status_code=429,
             detail=(
-                f"Too many intake requests. The limit is {INTAKE_LIMIT} per "
-                f"{int(INTAKE_WINDOW.total_seconds() // 60)} minutes."
+                f"Too many {label} requests. The limit is {limit} per "
+                f"{int(window.total_seconds() // 60)} minutes."
             ),
         )
     hits.append(now)
-    _intake_hits[client_ip] = hits
+    bucket[client_ip] = hits
     # Drop the tails of everyone who has gone quiet, so the dict can't grow
     # without bound on a long-lived process.
-    if len(_intake_hits) > 5000:
-        for ip in [k for k, v in _intake_hits.items() if not any(t > cutoff for t in v)]:
-            del _intake_hits[ip]
+    if len(bucket) > 5000:
+        for ip in [k for k, v in bucket.items() if not any(t > cutoff for t in v)]:
+            del bucket[ip]
+
+
+def _rate_limit_intake(client_ip: str) -> None:
+    _rate_limited(
+        _intake_hits, client_ip, limit=INTAKE_LIMIT, window=INTAKE_WINDOW, label="intake"
+    )
+
+
+def _rate_limit_voice(client_ip: str) -> None:
+    _rate_limited(
+        _voice_hits, client_ip, limit=VOICE_LIMIT, window=VOICE_WINDOW, label="voice"
+    )
 
 #: Guards against two scrapes overlapping — the scheduled one and a manual
 #: refresh, most likely.
@@ -312,9 +383,21 @@ async def run_scrape() -> ScrapeReport:
             len(report.sources_failed),
         )
 
-        # Run personalization job after scrape
+        # Copy this run's items into the NewsArticle table personalization
+        # reads (a separate database from the scraper's own store above) —
+        # every item, not just new ones, since sync is idempotent and this is
+        # also how a signed-up-after-the-fact user's articles get filled in.
         try:
-            if report.items_new > 0:
+            articles_synced = sync_scraped_articles(items)
+            log.info("article sync: %d new NewsArticle rows", articles_synced)
+        except Exception as e:  # noqa: BLE001
+            log.exception("article sync failed: %s", e)
+
+        # Run personalization job after scrape. Not gated on items_new: a
+        # user who saved their situation after the last scrape still needs
+        # matching against articles that were already there.
+        try:
+            if items:
                 personalization_stats = await personalize_articles(
                     relevance_scorer, personalized_summarizer
                 )
@@ -326,7 +409,7 @@ async def run_scrape() -> ScrapeReport:
                     personalization_stats["matches_created"],
                 )
             else:
-                log.info("personalization: skipped (no new articles)")
+                log.info("personalization: skipped (no articles)")
         except Exception as e:  # noqa: BLE001
             log.exception("personalization failed: %s", e)
 
@@ -662,6 +745,73 @@ async def refresh() -> ScrapeReport:
     return await run_scrape()
 
 
+# ── User situation (persisted — the one exception to "nothing is stored") ─────
+
+
+@app.get("/api/user/situation", response_model=SavedSituation)
+async def get_situation(
+    user: User = Depends(required_user),
+    db: Session = Depends(get_db),
+) -> SavedSituation:
+    """The authenticated user's currently recorded situation, if any.
+
+    Lets the frontend show what's on file (and offer to edit it) without
+    guessing from local state alone — local state and the server can drift
+    (new device, cleared storage) and this is the source of truth for what
+    personalization actually scores against.
+    """
+    record = (
+        db.query(UserVisaSituation)
+        .filter(UserVisaSituation.user_id == user.id)
+        .first()
+    )
+    if record is None:
+        return SavedSituation()
+    return SavedSituation(
+        status_text=record.current_status_text,
+        goal_text=record.goal_text,
+        updated_at=record.updated_at,
+        has_situation=True,
+    )
+
+
+@app.post("/api/user/situation", response_model=SaveSituationResponse)
+async def save_situation(
+    payload: SaveSituationRequest,
+    user: User = Depends(required_user),
+    db: Session = Depends(get_db),
+) -> SaveSituationResponse:
+    """Persist the authenticated user's current status and goal.
+
+    Upserts — a person has at most one recorded situation, and confirming an
+    updated one (status changed, new goal) replaces it rather than
+    accumulating history. This is what makes `/api/user/news/*` and the
+    scheduled scrape's personalization pass have anything to score against;
+    without a saved situation here, a signed-in person still only sees the
+    public feed.
+    """
+    now = utcnow()
+    record = (
+        db.query(UserVisaSituation)
+        .filter(UserVisaSituation.user_id == user.id)
+        .first()
+    )
+    if record is None:
+        record = UserVisaSituation(
+            user_id=user.id,
+            current_status_text=payload.status_text,
+            goal_text=payload.goal_text,
+            updated_at=now,
+        )
+        db.add(record)
+    else:
+        record.current_status_text = payload.status_text
+        record.goal_text = payload.goal_text
+        record.updated_at = now
+    db.commit()
+    return SaveSituationResponse(status="ok", updated_at=now)
+
+
 # ── Personalized news endpoints (user-specific, requires authentication) ──────
 
 
@@ -680,22 +830,30 @@ async def get_unread_news(
         UserNews.is_unread == True,
     ).order_by(UserNews.created_at.desc()).all()
 
-    articles = []
-    for user_news in unread_articles:
-        article = db.query(NewsArticle).filter(NewsArticle.id == user_news.article_id).first()
-        if article:
-            articles.append(
-                UserNewsArticle(
-                    article_id=article.id,
-                    title=article.title,
-                    link=article.link,
-                    summary=article.summary,
-                    relevance_reason="",
-                    marked_read_at=user_news.marked_read_at,
-                    is_unread=user_news.is_unread,
-                    personalized_summary=user_news.personalized_summary,
-                )
-            )
+    pairs = [
+        (user_news, article)
+        for user_news in unread_articles
+        if (article := db.query(NewsArticle).filter(NewsArticle.id == user_news.article_id).first())
+    ]
+
+    refresh_relevance_levels(db, user.id, pairs, relevance_scorer)
+    await ensure_personalized_summaries(db, user.id, pairs, personalized_summarizer)
+
+    articles = [
+        UserNewsArticle(
+            article_id=article.id,
+            title=article.title,
+            link=article.link,
+            summary=article.summary,
+            relevance_reason=user_news.relevance_reason,
+            relevance_level=user_news.relevance_level,
+            marked_read_at=user_news.marked_read_at,
+            is_unread=user_news.is_unread,
+            personalized_headline=user_news.personalized_headline,
+            personalized_summary=user_news.personalized_summary,
+        )
+        for user_news, article in pairs
+    ]
 
     return UnreadNewsFeedResponse(articles=articles, count=len(articles))
 
@@ -721,22 +879,30 @@ async def get_all_news(
         UserNews.user_id == user.id,
     ).order_by(NewsArticle.scraped_at.desc()).limit(limit).offset(offset).all()
 
-    articles = []
-    for user_news in user_news_list:
-        article = db.query(NewsArticle).filter(NewsArticle.id == user_news.article_id).first()
-        if article:
-            articles.append(
-                UserNewsArticle(
-                    article_id=article.id,
-                    title=article.title,
-                    link=article.link,
-                    summary=article.summary,
-                    relevance_reason="",
-                    marked_read_at=user_news.marked_read_at,
-                    is_unread=user_news.is_unread,
-                    personalized_summary=user_news.personalized_summary,
-                )
-            )
+    pairs = [
+        (user_news, article)
+        for user_news in user_news_list
+        if (article := db.query(NewsArticle).filter(NewsArticle.id == user_news.article_id).first())
+    ]
+
+    refresh_relevance_levels(db, user.id, pairs, relevance_scorer)
+    await ensure_personalized_summaries(db, user.id, pairs, personalized_summarizer)
+
+    articles = [
+        UserNewsArticle(
+            article_id=article.id,
+            title=article.title,
+            link=article.link,
+            summary=article.summary,
+            relevance_reason=user_news.relevance_reason,
+            relevance_level=user_news.relevance_level,
+            marked_read_at=user_news.marked_read_at,
+            is_unread=user_news.is_unread,
+            personalized_headline=user_news.personalized_headline,
+            personalized_summary=user_news.personalized_summary,
+        )
+        for user_news, article in pairs
+    ]
 
     return AllNewsFeedResponse(
         articles=articles,
@@ -775,3 +941,96 @@ async def mark_news_as_read(
     db.commit()
 
     return MarkReadResponse(status="ok", marked_read_at=now)
+
+
+# ── Voice assistant ────────────────────────────────────────────────────────────
+#
+# "Talk to Lumos" — a separate feature from the browser-only dictation on the
+# intake/onboarding forms (`voice_input_button.dart`). That feature's whole
+# point is that no audio ever leaves the browser; this one is explicitly a
+# server round-trip through ElevenLabs and Claude, disclosed as such in the
+# frontend. Neither the audio, the transcript, nor the case/deadline context
+# below is written anywhere — see `SituationInput` in models.py for the same
+# rule applied to `/api/news/relevant`.
+
+#: A recorded clip a person speaks in one turn is well under this; it exists
+#: to stop a mistaken or hostile upload from tying up the request.
+MAX_VOICE_UPLOAD_BYTES = 15 * 1024 * 1024
+
+
+@app.post("/api/voice/transcribe", response_model=VoiceTranscript)
+async def voice_transcribe(
+    request: Request,
+    file: UploadFile,
+    caller: str | None = Depends(optional_caller),
+) -> VoiceTranscript:
+    """One recorded clip in, its text out. Nothing here is stored."""
+    del caller
+    _rate_limit_voice(request.client.host if request.client else "unknown")
+
+    if not elevenlabs_client.available:
+        raise HTTPException(
+            status_code=503,
+            detail="Voice transcription is not configured on this server.",
+        )
+
+    audio_bytes = await file.read(MAX_VOICE_UPLOAD_BYTES + 1)
+    if len(audio_bytes) > MAX_VOICE_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="That recording is too long.")
+    if not audio_bytes:
+        raise HTTPException(status_code=422, detail="No audio was uploaded.")
+
+    try:
+        transcript = await elevenlabs_client.transcribe(
+            audio_bytes, file.content_type or "audio/webm"
+        )
+    except ElevenLabsError as e:
+        log.warning("voice transcription failed: %s", e)
+        raise HTTPException(
+            status_code=502, detail="Could not transcribe that recording. Try again."
+        ) from None
+
+    return VoiceTranscript(transcript=transcript)
+
+
+@app.post("/api/voice/assistant", response_model=VoiceAssistantResponse)
+async def voice_ask(
+    body: VoiceAssistantRequest,
+    request: Request,
+    caller: str | None = Depends(optional_caller),
+) -> VoiceAssistantResponse:
+    """A transcript plus the person's own case/deadline snapshot in, a short
+    spoken reply and proposed deadline-list changes out.
+
+    The proposed actions are never applied here — the client applies them, if
+    it chooses to, through its own `DeadlineService`.
+    """
+    del caller
+    _rate_limit_voice(request.client.host if request.client else "unknown")
+    return await voice_assistant.respond(body)
+
+
+@app.post("/api/voice/speak")
+async def voice_speak(
+    body: VoiceSpeakRequest,
+    request: Request,
+    caller: str | None = Depends(optional_caller),
+) -> Response:
+    """Reply text in, spoken audio (MP3) out."""
+    del caller
+    _rate_limit_voice(request.client.host if request.client else "unknown")
+
+    if not elevenlabs_client.available:
+        raise HTTPException(
+            status_code=503, detail="Voice playback is not configured on this server."
+        )
+
+    try:
+        audio_bytes = await elevenlabs_client.synthesize(body.text)
+    except ElevenLabsError as e:
+        log.warning("voice synthesis failed: %s", e)
+        raise HTTPException(
+            status_code=502, detail="Could not generate spoken audio. Try again."
+        ) from None
+
+    return Response(content=audio_bytes, media_type="audio/mpeg")

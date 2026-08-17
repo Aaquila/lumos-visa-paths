@@ -389,17 +389,47 @@ class NewsItemWithReadStatus {
   const NewsItemWithReadStatus({
     required this.item,
     required this.isRead,
+    this.personalizedHeadline,
     this.personalizedSummary,
+    this.relevance = Relevance.worthKnowing,
   });
+
+  /// Mirrors `summarizer.NOT_RELEVANT_HEADLINE` in the backend — the exact
+  /// headline text Claude returns when a document doesn't touch the reader's
+  /// stated situation, rather than forcing a connection.
+  static const notRelevantHeadline = 'Not directly relevant to your situation';
 
   final NewsItem item;
   final bool isRead;
 
-  /// Claude-written plain-language explanation personalized to this user's
+  /// Claude-written one-line "what this means for you" headline — or
+  /// [notRelevantHeadline] when the document doesn't touch this reader's
   /// situation. Null when not generated (no backend API key, generation
   /// failed, or the article predates this feature) — callers fall back to
-  /// `item.summary`, the raw scraped text.
+  /// `item.title`.
+  final String? personalizedHeadline;
+
+  /// The plain-language explanation behind [personalizedHeadline]. Null under
+  /// the same conditions — callers fall back to `item.summary`, the raw
+  /// scraped text.
   final String? personalizedSummary;
+
+  /// Whether [personalizedHeadline] is present and isn't the "not relevant"
+  /// sentinel — i.e. there's an actual personalized insight to show.
+  bool get hasRelevantInsight =>
+      personalizedHeadline != null &&
+      personalizedHeadline!.isNotEmpty &&
+      personalizedHeadline != notRelevantHeadline;
+
+  /// Whether Claude has explicitly judged this article as not touching the
+  /// reader's situation — distinct from "not generated yet".
+  bool get isMarkedNotRelevant => personalizedHeadline == notRelevantHeadline;
+
+  /// `affectsYou` names the reader's own status/form/country; `worthKnowing`
+  /// touches where they're headed but not them today. Never `background` —
+  /// those never reach a personalized feed at all. Backend field:
+  /// `UserNewsArticle.relevance_level`.
+  final Relevance relevance;
 
   /// The backend's `/api/user/news/all` and `/unread` responses return flat
   /// `UserNewsArticle` objects (`article_id`, `title`, `link`, `summary`,
@@ -418,7 +448,9 @@ class NewsItemWithReadStatus {
           summary: j['summary'] as String? ?? '',
         ),
         isRead: !(j['is_unread'] as bool? ?? true),
+        personalizedHeadline: j['personalized_headline'] as String?,
         personalizedSummary: j['personalized_summary'] as String?,
+        relevance: Relevance.parse(j['relevance_level'] as String?),
       );
 }
 

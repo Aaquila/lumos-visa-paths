@@ -44,6 +44,11 @@ class _NewsPageState extends State<NewsPage> {
   bool _isAuthenticated = false;
   String? _loadError;
 
+  /// When on, hides "worth knowing" matches and shows only items that name
+  /// the reader's own status, form or country. Client-side over whatever
+  /// page is currently loaded — it doesn't change what the server fetches.
+  bool _affectsYouOnly = false;
+
   static const _fallbackDisclaimer =
       'Informational only, not legal advice. Every card links to the original '
       'document — read it before acting.';
@@ -213,6 +218,19 @@ class _NewsPageState extends State<NewsPage> {
     return items;
   }
 
+  /// Sorted items, then narrowed to "affects you" when the filter is on.
+  List<NewsItemWithReadStatus> _visibleItems() {
+    final sorted = _sortedItems();
+    if (!_affectsYouOnly) return sorted;
+    return [
+      for (final item in sorted)
+        if (item.relevance == Relevance.affectsYou) item,
+    ];
+  }
+
+  int get _affectsYouCount =>
+      _allItems.where((i) => i.relevance == Relevance.affectsYou).length;
+
   @override
   Widget build(BuildContext context) {
     final mobile = Breaks.isMobile(context);
@@ -318,6 +336,8 @@ class _NewsPageState extends State<NewsPage> {
   }
 
   Widget _buildBody() {
+    final visible = _visibleItems();
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -338,6 +358,10 @@ class _NewsPageState extends State<NewsPage> {
           ),
           const SizedBox(height: T.s24),
         ],
+        if (_isAuthenticated && _allItems.isNotEmpty) ...[
+          _filterToggle(),
+          const SizedBox(height: T.s16),
+        ],
         if (_allItems.isEmpty)
           _Panel(
             child: Text(
@@ -345,8 +369,26 @@ class _NewsPageState extends State<NewsPage> {
               style: AppTheme.bodySm,
             ),
           )
+        else if (visible.isEmpty)
+          _Panel(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  "None of what's loaded so far names your own status, "
+                  'form or country directly.',
+                  style: AppTheme.bodySm,
+                ),
+                const SizedBox(height: T.s8),
+                PillButton(
+                  label: 'Show all relevant updates',
+                  onPressed: () => setState(() => _affectsYouOnly = false),
+                ),
+              ],
+            ),
+          )
         else ...[
-          for (final item in _sortedItems())
+          for (final item in visible)
             Padding(
               padding: const EdgeInsets.only(bottom: T.s16),
               child: NewsItemCard(
@@ -383,6 +425,20 @@ class _NewsPageState extends State<NewsPage> {
         ],
         const SizedBox(height: T.s40),
       ],
+    );
+  }
+
+  /// Toggles between the full personalized feed and "affects you" matches
+  /// only — items that name the reader's own status, form or country, not
+  /// just something adjacent to where they're headed.
+  Widget _filterToggle() {
+    return PillButton(
+      label: _affectsYouOnly
+          ? 'Affects you only ($_affectsYouCount)'
+          : 'Show: all relevant',
+      icon: Icons.filter_alt_outlined,
+      variant: _affectsYouOnly ? PillVariant.signal : PillVariant.outline,
+      onPressed: () => setState(() => _affectsYouOnly = !_affectsYouOnly),
     );
   }
 
