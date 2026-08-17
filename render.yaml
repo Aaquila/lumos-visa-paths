@@ -44,6 +44,11 @@ services:
 
   # Flutter web build, served as a static site. Render has no native Dart
   # runtime, so the build command fetches the Flutter SDK itself.
+  #
+  # API_BASE_URL below is baked in at build time. "lumos-api" was already
+  # taken by another Render app, so this backend actually deployed under
+  # a suffixed name — check the lumos-api service page in the dashboard
+  # for the real hostname if this ever needs updating again.
   - type: web
     name: lumos-web
     env: static
@@ -52,7 +57,7 @@ services:
       git clone https://github.com/flutter/flutter.git -b stable --depth 1 _flutter_sdk &&
       export PATH="$PATH:$(pwd)/_flutter_sdk/bin" &&
       flutter build web --release
-      --dart-define=API_BASE_URL=https://lumos-api.onrender.com
+      --dart-define=API_BASE_URL=https://lumos-api-23l3.onrender.com
       --dart-define=GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID
     staticPublishPath: build/web
     envVars:
