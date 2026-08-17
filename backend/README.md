@@ -1,4 +1,4 @@
-# Pathfinder backend
+# Lumos backend
 
 FastAPI service. Currently implements two slices: the **news slice** — a daily
 scraper over a curated allow-list of official immigration sources — and **case

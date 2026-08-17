@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="Lumos keeps your immigration deadlines, documents and policy changes in one calm place — and reminds you before they matter.">
+  <meta name="theme-color" content="#0080FF">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="Lumos">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <!--
+    Google Sign-In: deliberately NO <meta name="google-signin-client_id"> here.
+
+    google_sign_in_web 1.1.x (google_sign_in 7.x) takes the client id from
+    `GoogleSignIn.instance.initialize(clientId: ...)`, which lib/services/
+    auth_service.dart supplies from --dart-define=GOOGLE_CLIENT_ID. The meta tag
+    is only a fallback for that same value, and hardcoding it here would bake a
+    build-time secret-ish constant into a checked-in file.
+
+    Set GOOGLE_AUTH_CLIENT_ID=<your-id> in the root .env file and launch with
+    scripts/run_web.ps1 (Windows) or scripts/run_web.sh — see docs/RUNNING.md.
+  -->
+
+  <title>Lumos — your immigration assistant</title>
+  <link rel="manifest" href="manifest.json">
+
+  <!--
+    Service worker for notifications.
+
+    Registered here rather than from Dart so it is installed and active before
+    the Flutter engine finishes booting — the first thing the app does on a
+    return visit is catch the user up on reminders they missed, and that path
+    wants a live registration already in place.
+
+    IMPORTANT, and stated plainly because it is easy to assume otherwise: this
+    does NOT make reminders fire while the Lumos tab is closed. A service worker
+    is not a background timer. Closed-tab delivery needs Web Push (VAPID keys, a
+    subscription store and a server that posts to the push endpoint), none of
+    which exists in this project — see the TODO block at the top of web/sw.js.
+    Registering now is what makes dropping that in later a small change.
+  -->
+  <script>
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', function () {
+        // Resolved against <base href> so it still works under a sub-path
+        // deploy (`flutter build web --base-href /lumos/`). A worker's scope
+        // can never be broader than its own URL, so this must not be absolute.
+        navigator.serviceWorker.register('sw.js').catch(function (err) {
+          // A failed registration is not fatal: in-tab reminders and the
+          // calendar export both work without it.
+          console.warn('Lumos: service worker registration failed.', err);
+        });
+      });
+    }
+  </script>
+</head>
+<body>
+  <!--
+    You can customize the "flutter_bootstrap.js" script.
+    This is useful to provide a custom configuration to the Flutter loader
+    or to give the user feedback during the initialization process.
+
+    For more details:
+    * https://docs.flutter.dev/platform-integration/web/initialization
+  -->
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>

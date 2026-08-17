@@ -1,0 +1,66 @@
+databases:
+  - name: lumos-db
+    plan: free
+    databaseName: lumos
+    user: lumos
+
+services:
+  # FastAPI backend — news scraper, case intake, user data.
+  - type: web
+    name: lumos-api
+    env: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: DATABASE_URL
+        fromDatabase:
+          name: lumos-db
+          property: connectionString
+      # Frontend origin allowed to call this API. If Render assigns
+      # lumos-web a different hostname than expected (name already
+      # taken), update this to match after first deploy.
+      - key: CORS_ORIGINS
+        value: https://lumos-web.onrender.com
+      # Demo-scale: scrape in-process at boot. For a longer-running
+      # deployment, set this to 0 and point a Render Cron Job at
+      # POST /api/news/refresh instead (see backend/README.md#scheduling).
+      - key: SCRAPE_ON_STARTUP
+        value: "1"
+      - key: INTAKE_RATE_LIMIT
+        value: "12"
+      - key: LOG_LEVEL
+        value: INFO
+      # Secrets — set these in the Render dashboard after the blueprint syncs.
+      - key: GOOGLE_AUTH_CLIENT_ID
+        sync: false
+      - key: GOOGLE_AUTH_CLIENT_SECRET
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+
+  # Flutter web build, served as a static site. Render has no native Dart
+  # runtime, so the build command fetches the Flutter SDK itself.
+  - type: web
+    name: lumos-web
+    env: static
+    rootDir: frontend
+    buildCommand: >-
+      git clone https://github.com/flutter/flutter.git -b stable --depth 1 _flutter_sdk &&
+      export PATH="$PATH:$(pwd)/_flutter_sdk/bin" &&
+      flutter build web --release
+      --dart-define=API_BASE_URL=https://lumos-api.onrender.com
+      --dart-define=GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID
+    staticPublishPath: build/web
+    envVars:
+      # Same Google OAuth Web client ID as the backend's GOOGLE_AUTH_CLIENT_ID.
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+    routes:
+      # Flutter web is a client-routed SPA — unknown paths fall back to index.html.
+      - type: rewrite
+        source: /*
+        destination: /index.html

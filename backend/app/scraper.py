@@ -28,13 +28,13 @@ from bs4 import BeautifulSoup
 from .models import DocumentMeta, NewsItem, ScrapeReport, utcnow
 from .sources import FEDERAL_REGISTER_API, NODE_KEYWORDS, SOURCES, Source
 
-log = logging.getLogger("pathfinder.scraper")
+log = logging.getLogger("lumos.scraper")
 
 #: Identify ourselves honestly, but include a browser token: several of the
 #: government sites in the allow-list sit behind bot protection that rejects
 #: anything without one, and we would rather be identifiable than blocked.
 USER_AGENT = (
-    "Mozilla/5.0 (compatible; PathfinderBot/0.1; immigration deadline tracker; "
+    "Mozilla/5.0 (compatible; LumosBot/0.1; immigration deadline tracker; "
     "+https://github.com/) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 "
     "Safari/537.36"
 )

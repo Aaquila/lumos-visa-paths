@@ -1,4 +1,4 @@
-"""Pathfinder API — news scraping service.
+"""Lumos API — news scraping service.
 
 This is the first slice of the backend described in `backend/docs/API_ENDPOINTS.md`:
 the news endpoints and the daily scraper that fills them. Everything else in
@@ -76,7 +76,7 @@ logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO"),
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
-log = logging.getLogger("pathfinder.api")
+log = logging.getLogger("lumos.api")
 
 SCRAPE_INTERVAL = timedelta(hours=24)
 SCRAPE_ON_STARTUP = os.getenv("SCRAPE_ON_STARTUP", "1") == "1"
@@ -369,7 +369,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(
-    title="Pathfinder API",
+    title="Lumos API",
     version="0.1.0",
     summary="Immigration pathway and compliance tracker — news slice",
     lifespan=lifespan,

@@ -19,7 +19,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
 from pytz import timezone
 
-log = logging.getLogger("pathfinder.scheduler")
+log = logging.getLogger("lumos.scheduler")
 
 # Read configuration from environment.
 SCRAPER_ENABLED = os.getenv("SCRAPER_ENABLED", "1").lower() in ("1", "true", "yes")

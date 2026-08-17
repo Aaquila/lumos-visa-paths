@@ -25,7 +25,7 @@ from .models import NewsItem, SituationInput
 from .database import NewsArticle, UserNews, UserVisaSituation, utcnow, SessionLocal
 from .relevance import BACKGROUND, RelevanceScorer
 
-log = logging.getLogger("pathfinder.personalization")
+log = logging.getLogger("lumos.personalization")
 
 #: Process users in batches to avoid memory spikes on large user bases.
 BATCH_SIZE = 10

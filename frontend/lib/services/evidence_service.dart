@@ -1,0 +1,1705 @@
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart' show rootBundle;
+import 'package:shared_preferences/shared_preferences.dart';
+
+import '../models/case_profile.dart';
+import '../models/evidence.dart';
+import 'auth_service.dart';
+
+/// The O-1 / EB-1 evidence tracker.
+///
+/// ## Privacy
+///
+/// Everything here stays in the browser. `SharedPreferences` is the only store,
+/// there is no network call in this file, and there is nowhere in
+/// [EvidenceAssessment] to put a document — Lumos promises it never collects
+/// them, and the model is built so it cannot. If a backend ever syncs this, it
+/// syncs self-assessment and notes, and that decision belongs to the user.
+///
+/// ## Reference data
+///
+/// The criteria come from `docs/evidence_criteria_o1_eb1.json`. That file is
+/// also copied to `frontend/assets/data/`, but it is **not yet registered under
+/// `flutter: assets:`** in `pubspec.yaml`, so [loadCatalog] tries the asset and
+/// falls back to a byte-identical embedded copy. Once the pubspec entry lands,
+/// the asset wins automatically and nothing else changes.
+/// `test/evidence_test.dart` asserts the three copies stay in sync.
+class EvidenceService extends ChangeNotifier {
+  EvidenceService._();
+  static final instance = EvidenceService._();
+
+  static const assetPath = 'assets/data/evidence_criteria_o1_eb1.json';
+  static const _keyPrefix = 'lumos.evidence';
+
+  /// How many suggestions [nextActions] returns by default. Two, because a
+  /// longer list is another wall to read.
+  static const defaultSuggestionCount = 2;
+
+  /// Node ids the pathway graph models under the O-1/EB-1 "extraordinary
+  /// ability" umbrellas — the ones this tracker actually scores against.
+  static const _talentNodeIds = {
+    'extraordinary.o1',
+    'extraordinary.o1a',
+    'extraordinary.o1b',
+    'employment_gc.eb1',
+    'employment_gc.eb1a',
+    'employment_gc.eb1b',
+    'employment_gc.eb1c',
+  };
+
+  /// Whether this person's current status or goal is on the O-1/EB-1 talent
+  /// track, so the dashboard knows to surface the evidence tracker.
+  static bool isTalentTrack(CaseProfile? profile) {
+    if (profile == null) return false;
+    return _talentNodeIds.contains(profile.currentNodeId) ||
+        _talentNodeIds.contains(profile.goalNodeId) ||
+        profile.alternativeGoalIds.any(_talentNodeIds.contains);
+  }
+
+  EvidenceCatalog? _catalog;
+  EvidenceCatalog? get catalog => _catalog;
+
+  final Map<String, EvidenceAssessment> _assessments = {};
+  Map<String, EvidenceAssessment> get assessments =>
+      Map.unmodifiable(_assessments);
+
+  bool _loaded = false;
+  bool get isLoaded => _loaded;
+
+  String get _storageKey {
+    final id = AuthService.instance.session?.userId ?? '';
+    return id.isEmpty ? _keyPrefix : '$_keyPrefix.$id';
+  }
+
+  // ── Catalog ───────────────────────────────────────────────────────────────
+
+  /// Parses the reference data. Asset first, embedded copy as the fallback.
+  static Future<EvidenceCatalog> loadCatalog() async {
+    String raw;
+    try {
+      raw = await rootBundle.loadString(assetPath);
+    } catch (_) {
+      // Expected until `pubspec.yaml` registers the asset — see the class doc.
+      raw = embeddedCriteriaJson;
+    }
+    return EvidenceCatalog.fromJson(jsonDecode(raw) as Map<String, dynamic>);
+  }
+
+  /// Parses the embedded copy only. Synchronous, so tests and pure computation
+  /// need no binding.
+  static EvidenceCatalog embeddedCatalog() => EvidenceCatalog.fromJson(
+    jsonDecode(embeddedCriteriaJson) as Map<String, dynamic>,
+  );
+
+  // ── Lifecycle ─────────────────────────────────────────────────────────────
+
+  /// Loads criteria and any stored self-assessment. Safe to call repeatedly.
+  Future<void> load() async {
+    if (_loaded) return;
+    _loaded = true;
+    _catalog ??= await loadCatalog();
+    await _restore();
+    notifyListeners();
+  }
+
+  /// Test seam: install a catalog so [load] skips the asset.
+  ///
+  /// Deliberately does *not* mark the service loaded — restoring stored
+  /// self-assessment still has to happen, and a seam that quietly skipped it
+  /// would hide exactly the bug persistence tests exist to catch.
+  @visibleForTesting
+  void useCatalog(EvidenceCatalog catalog) => _catalog = catalog;
+
+  Future<void> _restore() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_storageKey);
+      if (raw == null) return;
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) return;
+      final stored = decoded['assessments'];
+      if (stored is! Map) return;
+      _assessments.clear();
+      for (final entry in stored.entries) {
+        final value = entry.value;
+        if (value is! Map) continue;
+        final a = EvidenceAssessment.fromJson(value.cast<String, dynamic>());
+        if (a.itemId.isNotEmpty) _assessments[a.itemId] = a;
+      }
+    } catch (_) {
+      // Corrupt or unavailable storage simply means "nothing recorded yet",
+      // which every screen already handles.
+    }
+  }
+
+  Future<void> _persist() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        _storageKey,
+        jsonEncode({
+          'version': 1,
+          'assessments': {
+            for (final e in _assessments.entries) e.key: e.value.toJson(),
+          },
+        }),
+      );
+    } catch (_) {
+      // In-memory for this session is still usable.
+    }
+  }
+
+  /// Called on sign-out so the next account starts clean.
+  void forget() {
+    _assessments.clear();
+    _loaded = false;
+    notifyListeners();
+  }
+
+  Future<void> clearAll() async {
+    _assessments.clear();
+    notifyListeners();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_storageKey);
+    } catch (_) {}
+  }
+
+  // ── Self-assessment ───────────────────────────────────────────────────────
+
+  EvidenceAssessment assessmentFor(String itemId) =>
+      _assessments[itemId] ?? EvidenceAssessment(itemId: itemId);
+
+  EvidenceStrength strengthFor(String itemId) => assessmentFor(itemId).strength;
+
+  Future<void> setStrength(String itemId, EvidenceStrength strength) =>
+      _write(assessmentFor(itemId).copyWith(strength: strength));
+
+  /// The user's own words about their own record. Never leaves the browser.
+  Future<void> setNotes(String itemId, String notes) =>
+      _write(assessmentFor(itemId).copyWith(notes: notes));
+
+  Future<void> _write(EvidenceAssessment next) async {
+    if (next.isEmpty) {
+      _assessments.remove(next.itemId);
+    } else {
+      _assessments[next.itemId] = next;
+    }
+    notifyListeners();
+    await _persist();
+  }
+
+  // ── Readiness ─────────────────────────────────────────────────────────────
+
+  /// Readiness for every category, in catalog order.
+  List<EvidenceReadiness> allReadiness() =>
+      (_catalog?.sets ?? const <EvidenceSet>[]).map(readinessFor).toList();
+
+  /// Where this person stands on one category.
+  ///
+  /// The computation branches on [EvidenceSet.structure] and never on the set
+  /// id, so a criteria count is only ever produced where counting is the real
+  /// scoring model:
+  ///
+  ///  * **criteria_count / …with_final_merits** (O-1A, O-1B, EB-1A) — count the
+  ///    criteria the user rated "I have something" or "Strong", compare against
+  ///    the typical threshold.
+  ///  * **gated_criteria** (EB-1B) — every gating requirement must be satisfied
+  ///    *and* the criteria count reached. Unmet gates veto: two criteria with a
+  ///    missing job offer is not readiness, and reporting it as "2 of 2" would
+  ///    be actively misleading.
+  ///  * **qualifying_conditions** (EB-1C) — no counting at all. Every condition
+  ///    generally has to hold; the progress figure is conditions satisfied out
+  ///    of conditions total, which is a checklist, not a score.
+  EvidenceReadiness readinessFor(EvidenceSet set) {
+    final criteriaMet = set.criteria
+        .where((c) => strengthFor(c.id).isPlausiblyMet)
+        .length;
+    final criteriaMoving = set.criteria
+        .where((c) => strengthFor(c.id).isMoving)
+        .length;
+
+    final mandatory = [...set.gates, ...set.conditions];
+    final mandatoryMet = mandatory
+        .where((g) => strengthFor(g.id).isPlausiblyMet)
+        .length;
+
+    final answered = set.allItems
+        .where((i) => !assessmentFor(i.id).isEmpty)
+        .length;
+
+    final threshold = set.threshold;
+    final gap = threshold == null
+        ? 0
+        : (threshold - criteriaMet).clamp(0, threshold);
+
+    late final String headline;
+    late final String detail;
+    late final double progress;
+    late final bool meets;
+
+    switch (set.structure) {
+      case EvidenceStructure.criteriaCount:
+      case EvidenceStructure.criteriaCountWithFinalMerits:
+        final t = threshold ?? 0;
+        meets = t > 0 && criteriaMet >= t;
+        progress = t == 0 ? 0 : (criteriaMet / t).clamp(0.0, 1.0);
+        headline = meets
+            ? 'You have marked $criteriaMet of the ${set.criteria.length} '
+                  'criteria as met — at or above the typical $t.'
+            : gap == 1
+            ? 'One more criterion to reach the typical $t.'
+            : 'You have marked $criteriaMet so far. $gap more to reach the '
+                  'typical $t.';
+        detail = set.structure == EvidenceStructure.criteriaCountWithFinalMerits
+            ? 'That is step one only. USCIS then weighs the whole record '
+                  'separately — see the two-step explanation below.'
+            : 'Meeting the typical count is generally necessary but not '
+                  'automatically sufficient; officers weigh the whole record.';
+
+      case EvidenceStructure.gatedCriteria:
+        final t = threshold ?? 0;
+        final gatesClear =
+            mandatory.isNotEmpty && mandatoryMet == mandatory.length;
+        meets = gatesClear && t > 0 && criteriaMet >= t;
+        // Gates and criteria carry equal weight in the bar, so clearing gates
+        // visibly moves the needle — which is honest, because it does.
+        final denominator = mandatory.length + t;
+        progress = denominator == 0
+            ? 0
+            : ((mandatoryMet + (criteriaMet > t ? t : criteriaMet)) /
+                      denominator)
+                  .clamp(0.0, 1.0);
+        headline = gatesClear
+            ? (meets
+                  ? 'Requirements look satisfied, and you have marked '
+                        '$criteriaMet of the ${set.criteria.length} criteria — '
+                        'at or above the typical $t.'
+                  : 'Requirements look satisfied. $gap more '
+                        '${gap == 1 ? 'criterion' : 'criteria'} to reach the '
+                        'typical $t.')
+            : 'This one is gated: $mandatoryMet of ${mandatory.length} '
+                  'requirements are in place. Those come before the criteria '
+                  'count.';
+        detail =
+            'EB-1B is not scored by counting alone. The requirements above '
+            'generally all have to hold — a strong criteria count does not '
+            'substitute for a missing one.';
+
+      case EvidenceStructure.qualifyingConditions:
+        meets = mandatory.isNotEmpty && mandatoryMet == mandatory.length;
+        progress = mandatory.isEmpty ? 0 : mandatoryMet / mandatory.length;
+        final remaining = mandatory.length - mandatoryMet;
+        headline = meets
+            ? 'All ${mandatory.length} conditions look satisfied from what you '
+                  'have recorded.'
+            : '$mandatoryMet of ${mandatory.length} conditions look satisfied. '
+                  '$remaining still open.';
+        detail =
+            'There is nothing to count here. EB-1C is a set of conditions '
+            'about your employment history and your employer, and they '
+            'generally all have to be true.';
+    }
+
+    return EvidenceReadiness(
+      setId: set.id,
+      visaCode: set.visaCode,
+      structure: set.structure,
+      headline: headline,
+      detail: detail,
+      progress: progress,
+      meetsTypicalThreshold: meets,
+      threshold: threshold,
+      criteriaTotal: set.criteria.length,
+      criteriaMet: criteriaMet,
+      criteriaMoving: criteriaMoving,
+      mandatoryTotal: mandatory.length,
+      mandatoryMet: mandatoryMet,
+      answered: answered,
+      totalItems: set.allItems.length,
+      encouragement: answered == 0
+          ? (set.encouragement.isEmpty
+                ? 'Most people start here, with nothing marked. That is the '
+                      'normal beginning, not a bad result.'
+                : set.encouragement)
+          : set.encouragement,
+    );
+  }
+
+  // ── Suggestions ───────────────────────────────────────────────────────────
+
+  /// The one or two things most worth doing next on this category.
+  ///
+  /// Ranking, highest first:
+  ///
+  ///  * **Mandatory items outrank criteria.** An unsatisfied EB-1B requirement
+  ///    or EB-1C condition blocks everything behind it, so it is always the
+  ///    higher-leverage move.
+  ///  * **Already moving outranks not started.** Finishing something in
+  ///    progress is nearly always cheaper than starting from nothing.
+  ///  * **Cheaper to build outranks slower.** [BuildEffort.reachability].
+  ///  * **Criteria that may not apply to this person are demoted**, so nobody
+  ///    is nudged toward an exhibitions criterion they have no use for.
+  ///
+  /// Ties break on item id, so the order is stable and testable.
+  List<EvidenceNextAction> nextActions(
+    EvidenceSet set, {
+    int limit = defaultSuggestionCount,
+  }) {
+    final candidates = <EvidenceNextAction>[];
+
+    for (final item in set.allItems) {
+      final strength = strengthFor(item.id);
+      if (strength.isPlausiblyMet) continue;
+
+      var score = item.effort.reachability * 20;
+      if (item.isMandatory) score += 100;
+      if (strength.isMoving) score += 30;
+      if (item.applicabilityNote != null) score -= 45;
+
+      candidates.add(
+        EvidenceNextAction(
+          item: item,
+          score: score,
+          currentStrength: strength,
+          rationale: _rationale(item, strength, set),
+        ),
+      );
+    }
+
+    candidates.sort((a, b) {
+      final byScore = b.score.compareTo(a.score);
+      return byScore != 0 ? byScore : a.item.id.compareTo(b.item.id);
+    });
+
+    return candidates.take(limit < 0 ? 0 : limit).toList();
+  }
+
+  /// Suggestions across every category, for the overview screen.
+  List<EvidenceNextAction> topActions({int limit = 3}) {
+    final all = <EvidenceNextAction>[];
+    for (final set in _catalog?.sets ?? const <EvidenceSet>[]) {
+      all.addAll(nextActions(set, limit: 2));
+    }
+    all.sort((a, b) {
+      final byScore = b.score.compareTo(a.score);
+      return byScore != 0 ? byScore : a.item.id.compareTo(b.item.id);
+    });
+    return all.take(limit).toList();
+  }
+
+  String _rationale(
+    EvidenceItem item,
+    EvidenceStrength strength,
+    EvidenceSet set,
+  ) {
+    if (item.isMandatory) {
+      return strength.isMoving
+          ? 'You are already part way here, and ${set.visaCode} generally '
+                'cannot work without it. Finishing this unblocks everything else.'
+          : '${set.visaCode} generally cannot work without this one, so it is '
+                'worth knowing where you stand before you build anything else.';
+    }
+    if (strength.isMoving) {
+      return 'You have already started this one. Finishing something in motion '
+          'is usually cheaper than opening a new front.';
+    }
+    switch (item.effort) {
+      case BuildEffort.weeks:
+        return 'Usually one of the quickest to move from nothing to something — '
+            'often weeks rather than years.';
+      case BuildEffort.months:
+        return 'A realistic next step: months rather than years, and it '
+            'compounds with the criteria around it.';
+      case BuildEffort.years:
+        return 'Slow to build, which is exactly why starting it now matters '
+            'more than the faster ones.';
+    }
+  }
+}
+
+/// A byte-identical copy of `docs/evidence_criteria_o1_eb1.json` (and of
+/// `assets/data/evidence_criteria_o1_eb1.json`).
+///
+/// It is embedded rather than only shipped as an asset because registering
+/// the asset means editing `pubspec.yaml`, which this feature cannot do on its
+/// own. Embedding keeps the tracker working today; once the pubspec entry
+/// exists, [EvidenceService.loadCatalog] prefers the asset and this becomes the
+/// fallback. `test/evidence_test.dart` fails if the copies ever drift.
+///
+/// Edit `docs/evidence_criteria_o1_eb1.json` and re-sync — never edit this
+/// literal by hand.
+const String embeddedCriteriaJson = r'''
+{
+  "meta": {
+    "title": "O-1 / EB-1 evidence criteria — profile building reference",
+    "purpose": "Backs the evidence tracker feature (PROJECT_PRD.md §3b). Models the O-1A, O-1B (arts), O-1B (motion picture & TV), EB-1A, EB-1B and EB-1C evidence structures. The three families do NOT share a shape: O-1A/O-1B/EB-1A are criteria-counting, EB-1B is gated-plus-counting, EB-1C is a set of qualifying conditions with no counting at all. Anything consuming this file must respect `structure` rather than assuming a threshold.",
+    "as_of": "2026-08-15",
+    "schema_version": 2,
+    "warning": "This is the stable regulatory *structure* (the criteria lists have not materially changed in years) — but USCIS Policy Manual interpretive guidance on what counts as strong evidence under each criterion is updated periodically (e.g. STEM / critical-and-emerging-technology examples added Jan 2025). Re-verify interpretive guidance against the live Policy Manual before showing evaluation language to a user.",
+    "disclaimer": "This is general information, not legal advice. It describes what USCIS generally looks for; it does not predict what USCIS will decide in any particular case. Adjudication is discretionary, officers weigh the whole record, and outcomes vary between cases that look similar on paper. O-1 and EB-1 petitions are usually worth reviewing with an immigration attorney before filing.",
+    "self_assessment_note": "The strength values a user records here are their own honest guess about their own record. They are not an eligibility determination and no part of this product claims to make one.",
+    "privacy_note": "Everything a user records against this reference stays in their own browser. Lumos never asks for, uploads, or stores documents — only self-assessment and the user's own notes.",
+    "sets_index": ["o1a", "o1b_arts", "o1b_mptv", "eb1a", "eb1b", "eb1c"],
+    "source_hint": {
+      "o1a": "8 CFR 214.2(o)(3)(iii); USCIS Policy Manual Volume 2, Part M, Chapter 4",
+      "o1b_arts": "8 CFR 214.2(o)(3)(iv); USCIS Policy Manual Volume 2, Part M, Chapter 4",
+      "o1b_mptv": "8 CFR 214.2(o)(3)(v); USCIS Policy Manual Volume 2, Part M, Chapter 4",
+      "eb1a": "8 CFR 204.5(h)(3); USCIS Policy Manual Volume 6, Part F, Chapter 2",
+      "eb1b": "8 CFR 204.5(i); USCIS Policy Manual Volume 6, Part F, Chapter 3",
+      "eb1c": "8 CFR 204.5(j); USCIS Policy Manual Volume 6, Part F, Chapter 5"
+    }
+  },
+
+  "one_time_achievement_alternative": {
+    "id": "criterion.one_time_achievement",
+    "name": "Major, internationally recognized one-time award",
+    "description": "A single award of major international recognition (e.g. Nobel Prize, Olympic medal, Pulitzer) satisfies eligibility outright, without needing 3 of the 8 criteria below.",
+    "evidence_examples": [
+      "Award certificate/citation",
+      "Independent media coverage confirming the award's international stature and selectivity"
+    ]
+  },
+
+  "criteria": [
+    {
+      "id": 1,
+      "key": "awards",
+      "name": "Nationally or internationally recognized awards",
+      "description": "Receipt of prizes or awards for excellence in the field, recognized nationally or internationally.",
+      "evaluation_notes": "Regional/state-level awards can qualify if the petitioner shows the region represents a nationally significant market or the award is otherwise nationally recognized within the field — geographic scope alone is not disqualifying if properly documented.",
+      "evidence_examples": ["Award certificates", "Selection criteria showing competitiveness", "Independent reporting on the award's significance"]
+    },
+    {
+      "id": 2,
+      "key": "membership",
+      "name": "Membership in associations requiring outstanding achievement",
+      "description": "Membership in associations in the field which require outstanding achievements of their members, as judged by recognized national or international experts.",
+      "evaluation_notes": "The association's own selection criteria matter more than its prestige by reputation alone — evidence should show what the membership bar actually requires and who judges it.",
+      "evidence_examples": ["Membership certificate", "Association bylaws/criteria describing the selection bar", "Description of the judging body"]
+    },
+    {
+      "id": 3,
+      "key": "published_material",
+      "name": "Published material about the person",
+      "description": "Published material in professional or major trade publications, or other major media, about the person and their work in the field.",
+      "evaluation_notes": "Material must be *about* the person's work, not merely quoting them or a byline they authored (that's criterion 6). Circulation/reach and the publication's standing in the field matter.",
+      "evidence_examples": ["Articles/profiles with title, date, author, and publication", "Circulation or audience data for the publication"]
+    },
+    {
+      "id": 4,
+      "key": "judging",
+      "name": "Judge of the work of others",
+      "description": "Participation, individually or on a panel, as a judge of the work of others in the same or an allied field.",
+      "evaluation_notes": "Peer review, grant review panels, competition judging, and thesis/dissertation committees can all qualify — the invitation itself (not just participation) is useful supporting evidence of standing in the field.",
+      "evidence_examples": ["Invitation to judge/review", "Documentation of the judging activity (e.g. reviewer confirmation, program listing as a judge)"]
+    },
+    {
+      "id": 5,
+      "key": "original_contributions",
+      "name": "Original contributions of major significance",
+      "description": "Original scientific, scholarly, artistic, athletic, or business-related contributions of major significance to the field.",
+      "evaluation_notes": "Often the hardest criterion to document well — needs independent evidence (citations, adoption by others, expert letters explaining *why* the contribution mattered) rather than the petitioner's own description of significance.",
+      "evidence_examples": ["Citation counts / independent adoption evidence", "Expert letters explaining the contribution's significance", "Patents or their real-world implementation"]
+    },
+    {
+      "id": 6,
+      "key": "authorship",
+      "name": "Authorship of scholarly articles",
+      "description": "Authorship of scholarly articles in professional journals or other major media, in the field.",
+      "evaluation_notes": "Straightforward to document but weak on its own if the articles show little independent citation or impact — pairs well with criterion 5.",
+      "evidence_examples": ["Publication list with journal names and dates", "Citation metrics"]
+    },
+    {
+      "id": 7,
+      "key": "critical_capacity",
+      "name": "Critical or essential capacity for a distinguished organization",
+      "description": "Employment in a critical or essential capacity for organizations or establishments with a distinguished reputation.",
+      "evaluation_notes": "Needs evidence both that the *organization* is distinguished and that the person's *role* was genuinely critical/essential, not just senior-sounding — org charts, scope of responsibility, and outcomes tied to the role help.",
+      "evidence_examples": ["Organizational chart or role description", "Employer letter describing the role's criticality", "Evidence of the organization's distinguished reputation"]
+    },
+    {
+      "id": 8,
+      "key": "high_remuneration",
+      "name": "High salary or remuneration",
+      "description": "Command of a high salary or other significantly high remuneration for services, in relation to others in the field.",
+      "evaluation_notes": "Needs a comparator — industry salary surveys or equivalent benchmarks for the same role/region/seniority, not just the raw number.",
+      "evidence_examples": ["Compensation documentation (offer letter, pay stubs, tax records)", "Independent salary survey/benchmark for the same field and seniority"]
+    }
+  ],
+
+  "sets": [
+    {
+      "id": "o1a",
+      "visa_code": "O-1A",
+      "title": "O-1A — extraordinary ability in sciences, education, business or athletics",
+      "pathway_node_id": "extraordinary.o1a",
+      "structure": "criteria_count",
+      "threshold": 3,
+      "sponsorship": "An employer or a US agent files this for you. You cannot file it for yourself.",
+      "summary": "A temporary work visa for people at the top of their field in science, education, business or athletics. It is not a green card, and there is no annual lottery to wait for — the timeline is mostly how long your evidence takes to assemble.",
+      "how_it_is_judged": "USCIS generally looks for evidence meeting at least three of the eight criteria below, and then weighs the record as a whole to decide whether it shows sustained national or international acclaim. Meeting three is generally necessary but not automatically sufficient.",
+      "two_step_note": "The formal two-step 'final merits determination' language is most associated with the EB-1A green card. In practice O-1A officers also weigh the whole record rather than just counting boxes, so treat three criteria as a floor rather than a finish line.",
+      "encouragement": "Most people who eventually file this started with zero criteria met. The eight below are the map, not a test you are failing.",
+      "one_time_achievement_alternative": {
+        "id": "o1a.one_time_achievement",
+        "name": "A major, internationally recognized one-time award",
+        "means": "One award of major international recognition — the examples usually given are a Nobel Prize or an Olympic medal — satisfies eligibility on its own, without needing three of the eight criteria.",
+        "note": "This path applies to very few people. If it applies to you, you generally already know."
+      },
+      "criteria": [
+        {
+          "id": "o1a.awards",
+          "key": "awards",
+          "category": "recognition",
+          "name": "Awards for excellence in your field",
+          "means": "You have received prizes or awards for excellence, and those awards are recognized nationally or internationally in your field — not just inside one company.",
+          "typically_counts": [
+            "National or international prizes in your discipline, with the selection criteria showing how competitive they were",
+            "Regional or state awards, if you can document that the region is a nationally significant market for your field, or that the award is otherwise nationally recognized",
+            "Independent reporting or third-party material describing the award's stature"
+          ],
+          "typically_does_not_count": [
+            "Internal employer awards — employee of the month, spot bonuses, internal hackathon prizes",
+            "Academic scholarships, tuition awards, and student prizes given largely on grades or need",
+            "Awards you paid to enter or where essentially every applicant is recognized",
+            "Certificates of participation or attendance"
+          ],
+          "how_to_build": [
+            "List every award you already have; several people underestimate what they hold because they never wrote it down",
+            "Ask your professional association or a senior colleague which awards in your field are genuinely selective and open to nomination",
+            "Many serious awards require nomination by someone else — ask a mentor or manager whether they would nominate you, and find the deadline"
+          ],
+          "time_to_build": "Typically months to years — nomination cycles usually run annually.",
+          "build_effort": "years"
+        },
+        {
+          "id": "o1a.membership",
+          "key": "membership",
+          "category": "community",
+          "name": "Membership in an association that requires outstanding achievement",
+          "means": "You belong to an association that only admits people who have achieved something outstanding, where recognized experts decide who gets in. The bar for entry is what matters, not how well known the association is.",
+          "typically_counts": [
+            "Fellow or senior-grade membership where admission is by peer review against a published achievement bar",
+            "The association's own bylaws or criteria showing what the bar is and who judges it",
+            "An explanation of who sits on the admitting body and why they are recognized experts"
+          ],
+          "typically_does_not_count": [
+            "Membership anyone can buy with a fee or a form",
+            "Membership based only on holding a degree, a job title, or years in the field",
+            "Student or associate grades of an otherwise selective body",
+            "Networking groups, alumni associations, and online communities"
+          ],
+          "how_to_build": [
+            "Check whether the main body in your field has a senior or fellow grade you could be nominated for, and read its published criteria",
+            "Most such grades need one or more existing members to sponsor you — ask early, because the paperwork is slow",
+            "Keep a copy of the published criteria at the time you were admitted; they change"
+          ],
+          "time_to_build": "Typically several months for an application cycle, on top of however long it takes to meet the bar.",
+          "build_effort": "months"
+        },
+        {
+          "id": "o1a.published_material",
+          "key": "published_material",
+          "category": "visibility",
+          "name": "Published material about you and your work",
+          "means": "Someone else wrote about you or your work, in a professional publication, a major trade publication, or major media. The key word is about — you are the subject, not the author.",
+          "typically_counts": [
+            "Profiles, features, or articles whose subject is you or your work, with title, date, author and publication captured",
+            "Trade press coverage in publications your field actually reads",
+            "Circulation or audience figures showing the publication's reach"
+          ],
+          "typically_does_not_count": [
+            "Articles you wrote yourself — those belong under scholarly articles instead",
+            "Pieces that only quote you briefly on someone else's story",
+            "Company press releases, your own blog, and your employer's marketing pages",
+            "Paid placements, sponsored content, and pay-to-publish outlets",
+            "Simple listings, directory entries, or a mention of your name in a long list"
+          ],
+          "how_to_build": [
+            "Search your own name and your project names thoroughly — people routinely find coverage they had forgotten",
+            "If your employer has a communications team, ask them to pitch the story of your work rather than the company",
+            "Speaking at a well-known conference in your field often produces genuine trade coverage as a side effect",
+            "Save the full article with masthead and date at the time it appears; links rot"
+          ],
+          "time_to_build": "Typically months — coverage follows work that is already visible.",
+          "build_effort": "months"
+        },
+        {
+          "id": "o1a.judging",
+          "key": "judging",
+          "category": "service",
+          "name": "Judging the work of other people",
+          "means": "You have judged other people's work in your field or an allied field — as a peer reviewer, on a grant panel, on a competition jury, or on a thesis committee. Being asked at all is part of the point.",
+          "typically_counts": [
+            "Peer review for a journal or conference, with the invitation and a confirmation of the completed review",
+            "Grant or funding review panels",
+            "Competition, award, or hackathon judging where you are listed as a judge",
+            "Thesis or dissertation committee service"
+          ],
+          "typically_does_not_count": [
+            "Reviewing your own team's work as part of your day job — code review, performance reviews, internal design review",
+            "Interviewing job candidates for your employer",
+            "Judging where you volunteered and everyone who volunteered was accepted, with nothing to show selectivity",
+            "An invitation you accepted but never actually completed"
+          ],
+          "how_to_build": [
+            "Sign up to the reviewer pool for a respected conference or journal in your field — many are openly recruiting",
+            "Tell a senior colleague you would like to review; reviewer invitations are largely word of mouth",
+            "Offer to judge a student competition, a hackathon, or a grant round through a professional body",
+            "Keep the invitation email and the completion confirmation for every single one"
+          ],
+          "time_to_build": "Often the fastest of the eight — weeks to a few months to get the first invitation.",
+          "build_effort": "weeks"
+        },
+        {
+          "id": "o1a.original_contributions",
+          "key": "original_contributions",
+          "category": "impact",
+          "name": "Original contributions of major significance",
+          "means": "You made something new — scientific, scholarly, business or athletic — and it mattered to the field beyond your own organization. The hard part is not that you did it; it is showing independently that it mattered.",
+          "typically_counts": [
+            "Independent adoption of your work by other organizations or researchers",
+            "Citation evidence in context, compared against what is normal in your field",
+            "Letters from independent experts explaining specifically why the contribution mattered, not just that you are talented",
+            "Patents together with evidence they are actually used, licensed, or implemented"
+          ],
+          "typically_does_not_count": [
+            "Your own description of how significant your work is",
+            "A patent grant on its own with no evidence of use",
+            "Letters from your own manager, co-founder, or co-authors only",
+            "Generic praise letters that could describe anyone",
+            "Work that stayed entirely internal to one employer with no external trace"
+          ],
+          "how_to_build": [
+            "Write down, in one paragraph, what changed in the world because of your work — if you cannot, that is the gap",
+            "Find people outside your organization who use your work and ask them to describe the impact in their own words",
+            "Open-sourcing, publishing, or presenting internal work is often what makes independent impact provable at all",
+            "Ask independent experts early; good letters take weeks and several drafts"
+          ],
+          "time_to_build": "Typically years. This is usually the slowest criterion and the one worth starting first.",
+          "build_effort": "years"
+        },
+        {
+          "id": "o1a.authorship",
+          "key": "authorship",
+          "category": "publication",
+          "name": "Authorship of scholarly articles",
+          "means": "You wrote scholarly articles in professional journals or other major media in your field. Easy to document; on its own it is usually one of the weaker criteria unless the work is visibly used.",
+          "typically_counts": [
+            "Peer-reviewed journal or conference papers, with journal name and date",
+            "Scholarly articles in major media aimed at your professional field",
+            "Citation metrics that put your work in context"
+          ],
+          "typically_does_not_count": [
+            "Personal blog posts and company engineering blogs, in most cases",
+            "Unrefereed preprints on their own, in most cases",
+            "Predatory or pay-to-publish journals — these can actively hurt the record",
+            "Internal white papers and unpublished manuscripts",
+            "Being thanked in an acknowledgements section rather than credited as an author"
+          ],
+          "how_to_build": [
+            "Turn work you have already done into a paper for a respected venue in your field",
+            "Co-authoring with an established researcher is a normal and legitimate way to start",
+            "Workshop and conference tracks are usually a faster first step than a full journal cycle",
+            "Keep a single canonical publication list with venue, date, and citation count"
+          ],
+          "time_to_build": "Typically months to years, depending on the venue's review cycle.",
+          "build_effort": "months"
+        },
+        {
+          "id": "o1a.critical_capacity",
+          "key": "critical_capacity",
+          "category": "role",
+          "name": "A critical or essential role at a distinguished organization",
+          "means": "You held a role that was genuinely critical to an organization that has a distinguished reputation. Two separate things have to be shown: that the organization is distinguished, and that your role really mattered to it.",
+          "typically_counts": [
+            "An org chart or role description showing where you sat and what depended on you",
+            "A letter from the organization describing what would have been at risk without your role",
+            "Concrete outcomes tied to your role — revenue, product launches, funding won, systems you owned",
+            "Independent evidence that the organization itself is distinguished: awards, funding, market position, press"
+          ],
+          "typically_does_not_count": [
+            "A senior-sounding title with nothing showing what the role actually carried",
+            "Working at a famous company without showing your own role was critical",
+            "A critical role at an organization with no evidence it is distinguished",
+            "A job description copied from the original posting"
+          ],
+          "how_to_build": [
+            "Ask for the letter while you still work there, or while your manager still remembers the detail",
+            "Collect the numbers now — headcount you led, systems you owned, revenue or funding your work carried",
+            "Gather the organization's own credentials separately: press, awards, funding rounds, rankings",
+            "Volunteer leadership at a distinguished body in your field can also count"
+          ],
+          "time_to_build": "Typically weeks to months if the role already exists — this is mostly documentation, not new achievement.",
+          "build_effort": "months"
+        },
+        {
+          "id": "o1a.high_remuneration",
+          "key": "high_remuneration",
+          "category": "compensation",
+          "name": "High salary or other high pay for your work",
+          "means": "You are paid significantly more than others doing similar work. A number on its own means nothing — the comparison to your field, level and region is the evidence.",
+          "typically_counts": [
+            "Offer letters, pay statements, or tax records showing total compensation",
+            "An independent salary survey or wage benchmark for the same role, seniority and region",
+            "Contract or engagement rates for freelance and consulting work, with a comparator"
+          ],
+          "typically_does_not_count": [
+            "A high salary with no benchmark to compare it against",
+            "A raw number compared across countries without adjusting for the local market",
+            "Unvested equity valued at a hoped-for future price",
+            "A high salary that is normal for your level in your market"
+          ],
+          "how_to_build": [
+            "Pull the standard wage data for your occupation, level, and metro area and see where you actually sit",
+            "Include the full package — bonus, equity, and benefits — not just base pay",
+            "If you are near the line, a raise or a competing offer can move this criterion faster than almost anything else"
+          ],
+          "time_to_build": "Typically weeks if the pay is already there — it is mostly gathering documents and a benchmark.",
+          "build_effort": "weeks"
+        }
+      ]
+    },
+
+    {
+      "id": "o1b_arts",
+      "visa_code": "O-1B (Arts)",
+      "title": "O-1B (arts) — distinction in the arts",
+      "pathway_node_id": "extraordinary.o1b",
+      "structure": "criteria_count",
+      "threshold": 3,
+      "sponsorship": "An employer or a US agent files this for you. A consultation letter from the relevant peer group or union is normally required and can add weeks.",
+      "summary": "The arts branch of the O-1B. The standard is 'distinction' — a high level of achievement showing a degree of skill and recognition substantially above the ordinary in your art form.",
+      "how_it_is_judged": "USCIS generally looks for evidence meeting at least three of the six criteria below, then weighs the record as a whole. The 'distinction' standard is generally understood to be a somewhat lower bar than O-1A extraordinary ability, though it is still a high one.",
+      "encouragement": "Arts careers rarely produce tidy paper trails. Starting with almost nothing recorded is normal — the work is usually recovering evidence you already earned.",
+      "one_time_achievement_alternative": {
+        "id": "o1b_arts.one_time_achievement",
+        "name": "A major award such as an Academy Award, Emmy, Grammy or Directors Guild Award",
+        "means": "Receipt of, or in some cases nomination for, a major award of that tier can satisfy eligibility on its own without needing three of the six criteria.",
+        "note": "We are not certain the nomination-versus-receipt treatment is identical across every award and category — this one is worth confirming with an attorney."
+      },
+      "criteria": [
+        {
+          "id": "o1b_arts.lead_role_production",
+          "key": "lead_role_production",
+          "category": "role",
+          "name": "A lead or starring role in a distinguished production",
+          "means": "You performed, or will perform, as a lead or starring participant in productions or events that have a distinguished reputation.",
+          "typically_counts": [
+            "Programmes, playbills, credits, or contracts showing your billing",
+            "Reviews and press establishing the production's standing",
+            "Evidence of the venue or festival's reputation"
+          ],
+          "typically_does_not_count": [
+            "Ensemble or background credits described as lead roles",
+            "Productions with no independent evidence they are distinguished",
+            "Self-produced work with no external recognition",
+            "Student or workshop productions, in most cases"
+          ],
+          "how_to_build": [
+            "Collect every programme, credit and contract you can still find — this is mostly recovery work",
+            "Ask past producers for a letter confirming your billing while they still remember you",
+            "Target one production that has a documented reputation rather than several that do not"
+          ],
+          "time_to_build": "Typically months to years to earn; weeks to document what you already have.",
+          "build_effort": "years"
+        },
+        {
+          "id": "o1b_arts.critical_recognition",
+          "key": "critical_recognition",
+          "category": "visibility",
+          "name": "National or international recognition, shown through reviews",
+          "means": "You have achieved national or international recognition, shown by critical reviews or other published material about you in major newspapers, trade journals, or magazines.",
+          "typically_counts": [
+            "Named reviews of your work in recognized outlets, with date and publication",
+            "Feature pieces about you as an artist",
+            "Coverage in the trade press your art form actually reads"
+          ],
+          "typically_does_not_count": [
+            "Listings and event calendars that merely name you",
+            "Your own website, social media, or press kit",
+            "Paid or sponsored coverage",
+            "Reviews of a production that never mention you"
+          ],
+          "how_to_build": [
+            "Ask venues and producers to send press invitations for your work",
+            "Archive every review the day it appears, with the masthead visible",
+            "Working with a producer or PR who has real press relationships changes this more than anything you can do alone"
+          ],
+          "time_to_build": "Typically months, and it follows the work rather than leading it.",
+          "build_effort": "months"
+        },
+        {
+          "id": "o1b_arts.lead_role_organization",
+          "key": "lead_role_organization",
+          "category": "role",
+          "name": "A lead, starring or critical role for a distinguished organization",
+          "means": "You have performed or will perform in a lead, starring, or critical role for organizations and establishments that have a distinguished reputation.",
+          "typically_counts": [
+            "A letter from the organization describing your role and why it was critical",
+            "Evidence of the organization's own reputation — awards, press, history, funding",
+            "Contracts or credits showing the nature of the role"
+          ],
+          "typically_does_not_count": [
+            "A title without any description of what the role carried",
+            "An organization with no documented reputation",
+            "Short guest appearances described as critical roles"
+          ],
+          "how_to_build": [
+            "Ask for the letter now, from someone who can describe your role specifically",
+            "Gather the organization's own credentials as a separate exhibit",
+            "Artistic direction, choreography, and other off-stage leadership roles count here too"
+          ],
+          "time_to_build": "Typically months to document; longer to earn.",
+          "build_effort": "months"
+        },
+        {
+          "id": "o1b_arts.commercial_success",
+          "key": "commercial_success",
+          "category": "commercial",
+          "name": "A record of major commercial or critically acclaimed success",
+          "means": "Your work has a record of major commercial success or critical acclaim — box office, ratings, sales, streams, standing, or the equivalent measure in your art form.",
+          "typically_counts": [
+            "Box office, sales, chart, ratings or streaming figures from an independent source",
+            "Awards and critical acclaim for the work itself",
+            "Evidence putting the numbers in context for your art form"
+          ],
+          "typically_does_not_count": [
+            "Raw follower or view counts with no context or independent source",
+            "Numbers reported only by you or your own team",
+            "Success of a project where your contribution is not identifiable"
+          ],
+          "how_to_build": [
+            "Ask distributors, labels, or producers for statements you are allowed to submit",
+            "Keep independent third-party reporting of any figures rather than screenshots",
+            "Context matters: a modest number that is large for your art form is still evidence"
+          ],
+          "time_to_build": "Typically years, and largely outside your direct control.",
+          "build_effort": "years"
+        },
+        {
+          "id": "o1b_arts.expert_recognition",
+          "key": "expert_recognition",
+          "category": "recognition",
+          "name": "Significant recognition from experts, critics or organizations",
+          "means": "You have received significant recognition for your achievements from critics, organizations, government agencies, or other recognized experts in your field.",
+          "typically_counts": [
+            "Letters from recognized experts describing your standing, with their own credentials attached",
+            "Recognition, honours or grants from arts bodies or government agencies",
+            "Invitations that themselves signal standing — juries, master classes, festival selection"
+          ],
+          "typically_does_not_count": [
+            "Letters from friends, family, or your own agent alone",
+            "Praise with no explanation of who the writer is or why their view carries weight",
+            "Form letters where several read identically"
+          ],
+          "how_to_build": [
+            "Identify five people whose opinion carries weight in your art form and build a real relationship, not a request",
+            "Give each letter writer specific material — dates, works, what you actually did",
+            "Attach the writer's own credentials to every letter"
+          ],
+          "time_to_build": "Typically months, and it depends on relationships that take longer to build than the letters do.",
+          "build_effort": "months"
+        },
+        {
+          "id": "o1b_arts.high_remuneration",
+          "key": "high_remuneration",
+          "category": "compensation",
+          "name": "High salary or other high pay compared to others in your art form",
+          "means": "You command a high salary or other substantial pay for your services, in relation to others in your field.",
+          "typically_counts": [
+            "Contracts, fee schedules, or pay statements",
+            "A comparator showing what is typical for your art form and level",
+            "Evidence of rates for future contracted work"
+          ],
+          "typically_does_not_count": [
+            "A number with no comparator",
+            "Gross production budgets treated as your personal pay",
+            "One unusually large payment that is not representative"
+          ],
+          "how_to_build": [
+            "Collect contracts and fee schedules from the last several years in one place",
+            "Union or guild rate cards are often the cleanest available comparator",
+            "Deferred and royalty income counts — document it"
+          ],
+          "time_to_build": "Typically weeks if the pay is already there.",
+          "build_effort": "weeks"
+        }
+      ]
+    },
+
+    {
+      "id": "o1b_mptv",
+      "visa_code": "O-1B (Motion Picture / TV)",
+      "title": "O-1B (motion picture & television) — extraordinary achievement",
+      "pathway_node_id": "extraordinary.o1b",
+      "structure": "criteria_count",
+      "threshold": 3,
+      "sponsorship": "An employer or a US agent files this for you. A consultation letter, normally from the relevant union and management organization, is typically required.",
+      "summary": "The film and television branch of the O-1B. The criteria mirror the arts branch, but the standard is higher: extraordinary achievement, meaning a degree of skill and recognition significantly above that ordinarily encountered — a person recognized as outstanding, notable, or leading.",
+      "how_it_is_judged": "USCIS generally looks for evidence meeting at least three of the six criteria below, then weighs the record as a whole against the higher motion-picture-and-television standard.",
+      "uncertainty_note": "We are not certain of the current treatment of 'comparable evidence' for the motion picture and television branch — historically it was not available here in the way it is for other O categories, and policy guidance in this area has been updated in recent years. Confirm with an attorney before relying on comparable evidence.",
+      "encouragement": "Film and TV careers produce a lot of paper. Most of the work here is finding it, not creating it.",
+      "one_time_achievement_alternative": {
+        "id": "o1b_mptv.one_time_achievement",
+        "name": "A major award such as an Academy Award, Emmy, Grammy or Directors Guild Award",
+        "means": "Receipt of, or in some cases nomination for, a major award of that tier can satisfy eligibility on its own.",
+        "note": "As above, the nomination-versus-receipt treatment is worth confirming case by case."
+      },
+      "criteria": [
+        {
+          "id": "o1b_mptv.lead_role_production",
+          "key": "lead_role_production",
+          "category": "role",
+          "name": "A lead or starring role in a distinguished production",
+          "means": "You have performed, or will perform, as a lead or starring participant in productions or events with a distinguished reputation.",
+          "typically_counts": [
+            "Screen credits, call sheets, and contracts showing billing",
+            "Reviews, festival selection, or distribution evidence establishing the production's standing",
+            "Studio, network or distributor letters confirming the role"
+          ],
+          "typically_does_not_count": [
+            "Uncredited or background work",
+            "Productions with no distribution, festival selection, or press",
+            "Projects still in development that may never be made"
+          ],
+          "how_to_build": [
+            "Pull your credits from the industry databases and verify each one against a contract",
+            "Ask production companies for confirmation letters while the production office still exists",
+            "One distinguished credit documented well beats five that are not"
+          ],
+          "time_to_build": "Typically years to earn; weeks to document.",
+          "build_effort": "years"
+        },
+        {
+          "id": "o1b_mptv.critical_recognition",
+          "key": "critical_recognition",
+          "category": "visibility",
+          "name": "National or international recognition through reviews and press",
+          "means": "You have national or international recognition shown by critical reviews or other published material about you in major papers, trade journals, or magazines.",
+          "typically_counts": [
+            "Named reviews and features in recognized trade or general press",
+            "Festival coverage naming you and your contribution",
+            "Interviews and profiles about your work"
+          ],
+          "typically_does_not_count": [
+            "Cast listings and credit databases with no editorial content",
+            "Your own social media and press kit",
+            "Paid placements",
+            "Reviews of the production that never mention you"
+          ],
+          "how_to_build": [
+            "Archive every review and feature with masthead and date the day it appears",
+            "Ask the production's publicist for the full press kit for anything you worked on",
+            "Festival Q&As and panels reliably generate quotable coverage"
+          ],
+          "time_to_build": "Typically months, following release cycles.",
+          "build_effort": "months"
+        },
+        {
+          "id": "o1b_mptv.lead_role_organization",
+          "key": "lead_role_organization",
+          "category": "role",
+          "name": "A lead, starring or critical role for a distinguished organization",
+          "means": "You have held a lead, starring, or critical role for organizations with a distinguished reputation — studios, networks, production companies, or similar.",
+          "typically_counts": [
+            "A letter from the studio, network or production company describing the role",
+            "Evidence of that organization's own standing",
+            "Contracts and deal memos showing the level of the role"
+          ],
+          "typically_does_not_count": [
+            "A credit at a well-known company with nothing showing your role mattered",
+            "Organizations with no documented reputation",
+            "Titles created for a single short project with no substance behind them"
+          ],
+          "how_to_build": [
+            "Request role letters from every significant production while contacts are current",
+            "Collect the organization's own credentials separately",
+            "Below-the-line heads of department can qualify here — the role, not the visibility, is the point"
+          ],
+          "time_to_build": "Typically months.",
+          "build_effort": "months"
+        },
+        {
+          "id": "o1b_mptv.commercial_success",
+          "key": "commercial_success",
+          "category": "commercial",
+          "name": "A record of major commercial or critically acclaimed success",
+          "means": "Your work has a record of major commercial success or critical acclaim — box office, ratings, streaming performance, or major festival and award recognition.",
+          "typically_counts": [
+            "Box office or ratings data from an independent industry source",
+            "Streaming or distribution performance reported by a third party",
+            "Major festival selection and awards for work you contributed to"
+          ],
+          "typically_does_not_count": [
+            "Production budget presented as commercial success",
+            "Figures reported only by the production itself",
+            "Success of a project where your contribution cannot be identified"
+          ],
+          "how_to_build": [
+            "Gather independent industry reporting for every title you worked on",
+            "Ask distributors for performance letters you are permitted to submit",
+            "Tie your specific contribution to the successful title explicitly"
+          ],
+          "time_to_build": "Typically years, and largely outside your control.",
+          "build_effort": "years"
+        },
+        {
+          "id": "o1b_mptv.expert_recognition",
+          "key": "expert_recognition",
+          "category": "recognition",
+          "name": "Significant recognition from experts, critics or organizations",
+          "means": "Recognition of your achievements from critics, organizations, government agencies, or other recognized experts in the field.",
+          "typically_counts": [
+            "Letters from recognized industry figures, with their own credentials attached",
+            "Guild, union, academy or arts council recognition",
+            "Invitations to jury, mentor, or teach at recognized institutions"
+          ],
+          "typically_does_not_count": [
+            "Letters from your own agent or manager alone",
+            "Praise that does not explain who is speaking or why it matters",
+            "Near-identical letters from several writers"
+          ],
+          "how_to_build": [
+            "Build relationships with people whose names carry weight before you need the letters",
+            "Give each writer specific detail — titles, dates, what you actually did",
+            "Guild membership and festival juries generate this kind of recognition naturally"
+          ],
+          "time_to_build": "Typically months.",
+          "build_effort": "months"
+        },
+        {
+          "id": "o1b_mptv.high_remuneration",
+          "key": "high_remuneration",
+          "category": "compensation",
+          "name": "High salary or other high pay compared to others in the industry",
+          "means": "You command a high salary or other substantial pay for your services, compared to others doing similar work in film and television.",
+          "typically_counts": [
+            "Deal memos, contracts, and pay statements",
+            "Guild or union rate cards as a comparator",
+            "Evidence of contracted future rates"
+          ],
+          "typically_does_not_count": [
+            "A number with no comparator",
+            "Total production budget",
+            "A single outlier payment presented as your normal rate"
+          ],
+          "how_to_build": [
+            "Collect deal memos and pay statements across several years in one place",
+            "Use the relevant guild minimums as the comparator and show where you sit above them",
+            "Include residuals and backend where they exist"
+          ],
+          "time_to_build": "Typically weeks if the pay is already there.",
+          "build_effort": "weeks"
+        }
+      ]
+    },
+
+    {
+      "id": "eb1a",
+      "visa_code": "EB-1A",
+      "title": "EB-1A — extraordinary ability (green card, self-petition)",
+      "pathway_node_id": "employment_gc.eb1a",
+      "structure": "criteria_count_with_final_merits",
+      "threshold": 3,
+      "criteria_total": 10,
+      "sponsorship": "You can file this for yourself. No employer, no job offer, and no PERM labor certification is required.",
+      "summary": "The employment-based green card for people with extraordinary ability. You file it yourself, which makes it unusual — but the standard is the highest of the employment categories.",
+      "how_it_is_judged": "This is judged in two separate steps, and confusing them is the single most common mistake applicants make.",
+      "two_step": {
+        "step_one": {
+          "name": "Step one — do you meet at least three criteria?",
+          "means": "USCIS first counts. Does your evidence satisfy at least three of the ten criteria below, taken at face value? This step is mostly mechanical: does the evidence exist and does it fit the criterion as written.",
+          "note": "Or, instead of the ten, a single major internationally recognized award."
+        },
+        "step_two": {
+          "name": "Step two — the final merits determination",
+          "means": "Then USCIS steps back and asks a completely different question: taking all the evidence together, does this person have sustained national or international acclaim, and are they among the small percentage at the very top of their field?",
+          "note": "This is why petitions that clearly meet four or five criteria are still denied. Step one asks whether the evidence exists; step two asks whether it adds up to someone at the top. Quality, independence and context carry step two — box-counting does not."
+        },
+        "why_it_matters": "Most people plan only for step one and are blindsided by step two. When you choose what to build next, choose the thing that makes the whole record more convincing, not the thing that ticks the fastest box."
+      },
+      "final_merits_note": "Meeting three criteria is generally necessary but never sufficient. Plan for both steps from the beginning.",
+      "encouragement": "Almost nobody has three of these on the day they first read the list. Most people start here.",
+      "one_time_achievement_alternative": {
+        "id": "eb1a.one_time_achievement",
+        "name": "A major, internationally recognized one-time award",
+        "means": "A single award of major international recognition — a Nobel Prize, an Olympic medal, a Pulitzer — satisfies the first step outright, without needing three of the ten criteria.",
+        "note": "The final merits determination still applies."
+      },
+      "criteria": [
+        {
+          "id": "eb1a.awards",
+          "key": "awards",
+          "category": "recognition",
+          "name": "Nationally or internationally recognized prizes or awards",
+          "means": "You have received lesser nationally or internationally recognized prizes or awards for excellence in your field. 'Lesser' here just means smaller than a Nobel — it still has to be recognized beyond your own organization.",
+          "typically_counts": [
+            "National or international awards with documented selection criteria and competitiveness",
+            "Independent reporting on the award's stature",
+            "Evidence of who judged it and how many applied"
+          ],
+          "typically_does_not_count": [
+            "Internal employer awards",
+            "Student prizes, scholarships, and grade-based academic honours",
+            "Pay-to-enter awards and awards nearly everyone receives",
+            "Participation certificates"
+          ],
+          "how_to_build": [
+            "Inventory what you already hold — this is frequently underestimated",
+            "Ask a mentor which awards in your field are genuinely selective and nomination-based",
+            "Find the nomination deadlines now; most run once a year"
+          ],
+          "time_to_build": "Typically months to years — annual nomination cycles.",
+          "build_effort": "years"
+        },
+        {
+          "id": "eb1a.membership",
+          "key": "membership",
+          "category": "community",
+          "name": "Membership in associations requiring outstanding achievement",
+          "means": "You belong to an association that requires outstanding achievement of its members, judged by recognized national or international experts. What matters is the bar for admission and who sets it.",
+          "typically_counts": [
+            "Fellow or senior grades admitted by peer review against a published bar",
+            "The association's bylaws or criteria showing the standard",
+            "Evidence about the credentials of the admitting body"
+          ],
+          "typically_does_not_count": [
+            "Membership available for a fee",
+            "Membership based only on a degree, a job title, or years of experience",
+            "Student and associate grades",
+            "Alumni networks and online communities"
+          ],
+          "how_to_build": [
+            "Find out whether your field's main body has a senior or fellow grade and read its published criteria",
+            "Line up the existing members who would need to sponsor you",
+            "Save the criteria as they stood on the day you were admitted"
+          ],
+          "time_to_build": "Typically several months for a cycle, plus however long it takes to meet the bar.",
+          "build_effort": "months"
+        },
+        {
+          "id": "eb1a.published_material",
+          "key": "published_material",
+          "category": "visibility",
+          "name": "Published material about you in professional or major media",
+          "means": "Other people wrote about you and your work, in professional publications, major trade publications, or major media. You are the subject.",
+          "typically_counts": [
+            "Profiles and features about you or your work, with title, date, author and publication",
+            "Trade coverage in publications your field reads",
+            "Circulation or audience data"
+          ],
+          "typically_does_not_count": [
+            "Articles you wrote — those go under scholarly articles",
+            "Passing quotes in someone else's story",
+            "Press releases, your own blog, employer marketing pages",
+            "Sponsored content and pay-to-publish outlets",
+            "Name-only mentions in lists and directories"
+          ],
+          "how_to_build": [
+            "Search hard for coverage you have forgotten",
+            "Have communications teams pitch your work, not the company",
+            "Conference talks in respected venues generate genuine trade coverage",
+            "Archive the full article, masthead and date, immediately"
+          ],
+          "time_to_build": "Typically months.",
+          "build_effort": "months"
+        },
+        {
+          "id": "eb1a.judging",
+          "key": "judging",
+          "category": "service",
+          "name": "Judging the work of others",
+          "means": "You have judged the work of others in your field or an allied field, alone or on a panel.",
+          "typically_counts": [
+            "Journal or conference peer review, with invitation and completion confirmation",
+            "Grant or funding review panels",
+            "Competition and award juries where you are listed",
+            "Thesis and dissertation committees"
+          ],
+          "typically_does_not_count": [
+            "Internal work review — code review, design review, performance reviews",
+            "Hiring interviews for your own employer",
+            "Open-to-all volunteer judging with nothing showing selectivity",
+            "Invitations you never completed"
+          ],
+          "how_to_build": [
+            "Join reviewer pools for respected journals and conferences — many recruit openly",
+            "Tell senior colleagues you want to review; invitations travel by word of mouth",
+            "Offer to judge student competitions and grant rounds",
+            "Keep the invitation and the completion record for each one"
+          ],
+          "time_to_build": "Often the fastest — weeks to a few months for a first invitation.",
+          "build_effort": "weeks"
+        },
+        {
+          "id": "eb1a.original_contributions",
+          "key": "original_contributions",
+          "category": "impact",
+          "name": "Original contributions of major significance",
+          "means": "You made original contributions — scientific, scholarly, artistic, athletic or business-related — of major significance to your field. This is usually the criterion that carries the final merits step too.",
+          "typically_counts": [
+            "Independent adoption of your work by others",
+            "Citation evidence with field-normalized context",
+            "Independent expert letters explaining specifically why the work mattered",
+            "Patents together with evidence of real implementation or licensing"
+          ],
+          "typically_does_not_count": [
+            "Your own assertion of significance",
+            "A patent grant alone with no evidence of use",
+            "Letters only from co-authors, managers, and co-founders",
+            "Generic praise that could apply to anyone",
+            "Purely internal work with no external trace"
+          ],
+          "how_to_build": [
+            "Write one paragraph on what changed in the world because of your work",
+            "Find independent users of your work and ask them to describe the impact themselves",
+            "Publishing or open-sourcing internal work is often the only way to make impact provable",
+            "Start expert letters early — good ones take weeks"
+          ],
+          "time_to_build": "Typically years. Slowest and most valuable — start first.",
+          "build_effort": "years"
+        },
+        {
+          "id": "eb1a.authorship",
+          "key": "authorship",
+          "category": "publication",
+          "name": "Authorship of scholarly articles",
+          "means": "You authored scholarly articles in professional journals or other major media in your field.",
+          "typically_counts": [
+            "Peer-reviewed papers with venue and date",
+            "Scholarly articles in major media aimed at your field",
+            "Citation metrics in context"
+          ],
+          "typically_does_not_count": [
+            "Personal and company blogs, in most cases",
+            "Standalone unrefereed preprints, in most cases",
+            "Predatory or pay-to-publish journals, which can hurt the record",
+            "Internal white papers",
+            "Acknowledgements rather than authorship"
+          ],
+          "how_to_build": [
+            "Turn existing work into a paper for a respected venue",
+            "Co-author with an established researcher",
+            "Workshops and conference tracks move faster than journals",
+            "Keep one canonical publication list"
+          ],
+          "time_to_build": "Typically months to years depending on the venue.",
+          "build_effort": "months"
+        },
+        {
+          "id": "eb1a.exhibitions",
+          "key": "exhibitions",
+          "category": "portfolio",
+          "name": "Your work displayed at artistic exhibitions or showcases",
+          "means": "Your work has been displayed at artistic exhibitions or showcases. This criterion is written for artistic work specifically.",
+          "typically_counts": [
+            "Exhibition catalogues, programmes, and installation records",
+            "Evidence of the venue or showcase's standing",
+            "Curatorial statements and selection records"
+          ],
+          "typically_does_not_count": [
+            "Conference posters and trade-show booths, which are generally not artistic exhibitions",
+            "Online portfolios and personal websites",
+            "Exhibitions you organized and funded yourself, in most cases",
+            "Group shows open to all applicants with no selection"
+          ],
+          "how_to_build": [
+            "Apply to juried exhibitions and showcases with documented selection",
+            "Keep the catalogue and the selection notification for every show",
+            "If your field is not artistic, this criterion likely will not apply to you — that is fine and normal"
+          ],
+          "time_to_build": "Typically months per exhibition cycle.",
+          "build_effort": "months",
+          "applicability_note": "Generally only relevant to artistic work. If your field is not artistic, skip it without concern."
+        },
+        {
+          "id": "eb1a.leading_role",
+          "key": "leading_role",
+          "category": "role",
+          "name": "A leading or critical role at a distinguished organization",
+          "means": "You have played a leading or critical role for organizations or establishments with a distinguished reputation. Both halves must be shown: the organization's standing, and your role's importance to it.",
+          "typically_counts": [
+            "Org charts and role descriptions showing what depended on you",
+            "Letters describing what the organization would have lost without your role",
+            "Outcomes tied to your role — revenue, launches, funding, systems owned",
+            "Independent evidence of the organization's distinguished reputation"
+          ],
+          "typically_does_not_count": [
+            "A senior title with no substance shown",
+            "Working somewhere famous without showing your role mattered",
+            "A critical role at an organization with no documented standing",
+            "A copied job posting"
+          ],
+          "how_to_build": [
+            "Get the letter while people still remember the detail",
+            "Collect the numbers now — team size, systems, revenue, funding",
+            "Gather the organization's own credentials as a separate exhibit",
+            "Leadership at a distinguished professional body also counts"
+          ],
+          "time_to_build": "Typically weeks to months when the role already exists — mostly documentation.",
+          "build_effort": "months"
+        },
+        {
+          "id": "eb1a.high_remuneration",
+          "key": "high_remuneration",
+          "category": "compensation",
+          "name": "High salary or other significantly high pay",
+          "means": "You command a high salary or other significantly high remuneration compared with others in your field. The comparison is the evidence, not the number.",
+          "typically_counts": [
+            "Offer letters, pay statements, tax records showing total compensation",
+            "An independent wage survey for the same occupation, level and region",
+            "Consulting or contract rates with a comparator"
+          ],
+          "typically_does_not_count": [
+            "A high number with no benchmark",
+            "Cross-country comparisons with no adjustment for local markets",
+            "Unvested equity at a hoped-for valuation",
+            "Pay that is simply normal for your level"
+          ],
+          "how_to_build": [
+            "Pull standard wage data for your occupation, level and metro and see where you land",
+            "Count the whole package, not just base",
+            "If you are close, a raise or competing offer moves this faster than anything else"
+          ],
+          "time_to_build": "Typically weeks if the pay is already there.",
+          "build_effort": "weeks"
+        },
+        {
+          "id": "eb1a.commercial_success",
+          "key": "commercial_success",
+          "category": "commercial",
+          "name": "Commercial success in the performing arts",
+          "means": "You have achieved commercial success in the performing arts, shown by box office receipts, sales, or comparable measures.",
+          "typically_counts": [
+            "Box office, sales, chart or streaming figures from independent sources",
+            "Distributor or label statements",
+            "Context showing what those figures mean in your art form"
+          ],
+          "typically_does_not_count": [
+            "Follower and view counts with no independent source or context",
+            "Production budgets",
+            "Figures for work where your contribution is not identifiable"
+          ],
+          "how_to_build": [
+            "Ask distributors and labels for statements you may submit",
+            "Keep independent third-party reporting rather than screenshots",
+            "If you are not in the performing arts, this criterion will not apply — that is expected"
+          ],
+          "time_to_build": "Typically years, and largely outside your control.",
+          "build_effort": "years",
+          "applicability_note": "Generally only relevant to the performing arts. Skip it without concern if that is not your field."
+        }
+      ]
+    },
+
+    {
+      "id": "eb1b",
+      "visa_code": "EB-1B",
+      "title": "EB-1B — outstanding professor or researcher (green card)",
+      "pathway_node_id": "employment_gc.eb1b",
+      "structure": "gated_criteria",
+      "threshold": 2,
+      "criteria_total": 6,
+      "sponsorship": "Your employer files this for you. You cannot self-petition EB-1B.",
+      "summary": "A green card category for academics and researchers who are internationally recognized as outstanding in a specific academic area. It skips the PERM labor certification, which is why it is materially faster at the front end than EB-2 or EB-3.",
+      "structure_explainer": "EB-1B is not a pure counting exercise, and treating it like EB-1A is a common mistake. There are three gating requirements that must all be satisfied before the evidence criteria matter at all. If any gate is unmet, the criteria count does not save the petition.",
+      "how_it_is_judged": "USCIS generally checks the three gating requirements first, then looks for evidence meeting at least two of the six criteria showing international recognition as outstanding, then weighs the record as a whole.",
+      "encouragement": "This one is unusual: the gates are mostly about your job and your career stage, not about accumulating achievements. Many researchers find they are closer than they expected.",
+      "gates": [
+        {
+          "id": "eb1b.gate.job_offer",
+          "kind": "requirement",
+          "category": "sponsorship",
+          "name": "A qualifying permanent job offer from a US employer",
+          "means": "You need an offer for a tenured or tenure-track teaching position, a comparable research position at a university or institution of higher education, or a research position with a private employer. For a private employer, the employer generally must employ at least three full-time researchers and have documented accomplishments in the field.",
+          "typically_counts": [
+            "A written offer letter describing the position as permanent or tenure-track",
+            "For private employers, evidence of at least three full-time researchers and departmental accomplishments"
+          ],
+          "typically_does_not_count": [
+            "A fixed-term postdoctoral appointment with a defined end date, in most cases",
+            "A job offer you intend to obtain but do not yet have",
+            "Self-employment or your own company, in most cases"
+          ],
+          "how_to_build": [
+            "Ask whether your position can be described as permanent or tenure-track — sometimes the paperwork can be, even when the culture is informal",
+            "If you are a postdoc, the usual route is converting to a research scientist or faculty line first",
+            "Talk to your institution's international office early; they have done this before"
+          ],
+          "time_to_build": "Typically months to years — this often depends on a career step, not paperwork.",
+          "build_effort": "years"
+        },
+        {
+          "id": "eb1b.gate.experience",
+          "kind": "requirement",
+          "category": "career",
+          "name": "At least three years of teaching or research experience",
+          "means": "You generally need at least three years of experience teaching or doing research in your academic area. Work done while earning an advanced degree can count in certain circumstances.",
+          "typically_counts": [
+            "Employment letters describing your research or teaching duties and dates",
+            "Doctoral research experience, where the conditions for counting it are met"
+          ],
+          "typically_does_not_count": [
+            "Coursework without a research or teaching component",
+            "Industry work unrelated to your academic area"
+          ],
+          "how_to_build": [
+            "Total up your research and teaching time carefully, including doctoral work",
+            "Get dated employment letters that describe the work, not just the title"
+          ],
+          "time_to_build": "Time-based — it accrues rather than being built.",
+          "build_effort": "years"
+        },
+        {
+          "id": "eb1b.gate.international_recognition",
+          "kind": "requirement",
+          "category": "standing",
+          "name": "International recognition as outstanding in your academic area",
+          "means": "The overall standard: you must be recognized internationally as outstanding in a specific academic area. This is the thing the six criteria below are evidence for — it is not a separate box to tick, but it is what the record as a whole has to show.",
+          "typically_counts": [
+            "Evidence spanning more than one country",
+            "Independent recognition of your work by researchers you have never worked with"
+          ],
+          "typically_does_not_count": [
+            "Recognition confined to one institution or one country, in most cases",
+            "Recognition from collaborators only"
+          ],
+          "how_to_build": [
+            "Present at international conferences and collaborate outside your own country",
+            "Seek reviewers and letter writers who have no connection to your own work"
+          ],
+          "time_to_build": "Typically years, and it is the sum of the criteria below.",
+          "build_effort": "years"
+        }
+      ],
+      "criteria": [
+        {
+          "id": "eb1b.awards",
+          "key": "awards",
+          "category": "recognition",
+          "name": "Major prizes or awards for outstanding achievement",
+          "means": "You have received major prizes or awards for outstanding achievement in your academic field.",
+          "typically_counts": ["Field-level awards with documented selection", "Independent evidence of the award's standing"],
+          "typically_does_not_count": ["Internal institutional awards", "Student prizes and travel grants, in most cases"],
+          "how_to_build": ["Ask your department which awards are open to nomination", "Find the annual deadlines now"],
+          "time_to_build": "Typically months to years.",
+          "build_effort": "years"
+        },
+        {
+          "id": "eb1b.membership",
+          "key": "membership",
+          "category": "community",
+          "name": "Membership in associations requiring outstanding achievement",
+          "means": "You belong to associations that require outstanding achievements of their members.",
+          "typically_counts": ["Senior or fellow grades admitted by peer review", "The association's published criteria"],
+          "typically_does_not_count": ["Fee-based membership", "Membership by degree or job title alone"],
+          "how_to_build": ["Check for a senior or fellow grade in your learned society", "Line up sponsoring members"],
+          "time_to_build": "Typically several months per cycle.",
+          "build_effort": "months"
+        },
+        {
+          "id": "eb1b.published_material",
+          "key": "published_material",
+          "category": "visibility",
+          "name": "Published material written by others about your work",
+          "means": "Material in professional publications, written by others, about your work in the academic field.",
+          "typically_counts": ["Review articles discussing your work", "Professional press coverage of your research by other authors"],
+          "typically_does_not_count": ["Material you wrote yourself", "Your institution's own press releases, in most cases"],
+          "how_to_build": ["Ask your institution's press office to pitch results to the trade and science press", "Track who cites and discusses your work in review literature"],
+          "time_to_build": "Typically months.",
+          "build_effort": "months"
+        },
+        {
+          "id": "eb1b.judging",
+          "key": "judging",
+          "category": "service",
+          "name": "Judging the work of others in the field",
+          "means": "You participated, alone or on a panel, as a judge of the work of others in the same or an allied academic field.",
+          "typically_counts": ["Journal peer review with invitation and completion record", "Grant review panels", "Thesis committees"],
+          "typically_does_not_count": ["Internal departmental review of your own group's work", "Invitations never completed"],
+          "how_to_build": ["Join journal reviewer pools", "Tell your PI or department head you want review invitations", "Keep every invitation email"],
+          "time_to_build": "Often the fastest — weeks to months.",
+          "build_effort": "weeks"
+        },
+        {
+          "id": "eb1b.original_research",
+          "key": "original_research",
+          "category": "impact",
+          "name": "Original scientific or scholarly research contributions",
+          "means": "You made original contributions to scientific or scholarly research in your academic field.",
+          "typically_counts": ["Citation evidence in field context", "Independent adoption of your methods or findings", "Independent expert letters explaining why the work mattered"],
+          "typically_does_not_count": ["Your own claim of significance", "Letters only from co-authors and supervisors"],
+          "how_to_build": ["Identify independent groups using your work and ask them to say so", "Start expert letters early and give writers specifics"],
+          "time_to_build": "Typically years.",
+          "build_effort": "years"
+        },
+        {
+          "id": "eb1b.authorship",
+          "key": "authorship",
+          "category": "publication",
+          "name": "Authorship of scholarly books or articles",
+          "means": "You authored scholarly books or articles, in journals with international circulation, in your academic field.",
+          "typically_counts": ["Peer-reviewed articles in internationally circulated journals", "Scholarly books and chapters", "Citation metrics"],
+          "typically_does_not_count": ["Predatory journals", "Internal reports", "Acknowledgements rather than authorship"],
+          "how_to_build": ["Target journals with genuine international readership", "Keep one canonical publication list with venues and citations"],
+          "time_to_build": "Typically months to years per venue cycle.",
+          "build_effort": "months"
+        }
+      ]
+    },
+
+    {
+      "id": "eb1c",
+      "visa_code": "EB-1C",
+      "title": "EB-1C — multinational manager or executive (green card)",
+      "pathway_node_id": "employment_gc.eb1c",
+      "structure": "qualifying_conditions",
+      "threshold": null,
+      "sponsorship": "Your US employer files this for you. You cannot self-petition EB-1C.",
+      "summary": "A green card category for managers and executives transferring into the US from a related company abroad. It skips PERM, so the front end is much shorter than EB-2 or EB-3.",
+      "structure_explainer": "EB-1C has no criteria list and nothing to count. It is a set of conditions about your job history and your employer's structure, and they generally all have to be true. Building evidence here does not mean accumulating achievements — it means establishing facts about employment and corporate relationships. Any scoring that counts criteria is simply the wrong tool for this category.",
+      "how_it_is_judged": "USCIS generally checks each condition below. There is no 'three out of ten'. A single unmet condition is usually fatal, and no amount of other evidence substitutes for it.",
+      "encouragement": "This category is more about your situation than your CV. If the conditions fit, they fit — and if they do not, another category is probably the better use of your energy.",
+      "conditions": [
+        {
+          "id": "eb1c.cond.prior_employment",
+          "kind": "condition",
+          "category": "history",
+          "name": "At least one year employed abroad by a related company",
+          "means": "You must have been employed outside the US for at least one year, generally within the three years before the petition or before your admission to the US as a nonimmigrant worker, by a firm that is a parent, subsidiary, affiliate, or branch of the US employer.",
+          "typically_counts": [
+            "Employment letters and payroll records from the foreign entity covering the qualifying year",
+            "Documentation of the corporate relationship between the two entities"
+          ],
+          "typically_does_not_count": [
+            "Employment by an unrelated company",
+            "A qualifying year that falls outside the relevant look-back window",
+            "Contractor arrangements not amounting to employment, in most cases"
+          ],
+          "how_to_build": [
+            "Confirm the exact dates and get letters from the foreign entity now",
+            "Have the corporate relationship documented by the company's counsel — this is the piece that most often falls apart"
+          ],
+          "time_to_build": "Time-based and historical — it either happened or it did not. Documenting it takes weeks.",
+          "build_effort": "weeks"
+        },
+        {
+          "id": "eb1c.cond.prior_capacity",
+          "kind": "condition",
+          "category": "history",
+          "name": "That work abroad was in a managerial or executive capacity",
+          "means": "The qualifying year abroad must have been in a managerial or executive capacity, as those terms are defined in the immigration rules — which is narrower than how most companies use the words.",
+          "typically_counts": [
+            "Org charts showing who reported to you and what you controlled",
+            "A description of your discretionary authority and the scope of decisions you made",
+            "Evidence of managing a function or a department, not just doing the work"
+          ],
+          "typically_does_not_count": [
+            "A manager title where you primarily performed the work yourself",
+            "Managing a small team of non-professional staff, in some cases",
+            "Seniority alone with no supervisory or functional authority"
+          ],
+          "how_to_build": [
+            "Get an org chart from the relevant period, not a reconstruction",
+            "Document your budget authority, hiring authority, and the decisions you owned",
+            "The words managerial and executive have specific legal meanings here — worth an attorney's read"
+          ],
+          "time_to_build": "Typically weeks to document a role you already held.",
+          "build_effort": "weeks"
+        },
+        {
+          "id": "eb1c.cond.us_capacity",
+          "kind": "condition",
+          "category": "future",
+          "name": "You are coming to work in a managerial or executive capacity",
+          "means": "The US role must also be managerial or executive in the same specific sense — not a senior individual contributor role with a management-sounding title.",
+          "typically_counts": [
+            "A detailed US position description with reporting lines",
+            "The US organizational chart showing the role in context",
+            "Evidence the US entity can actually support that role"
+          ],
+          "typically_does_not_count": [
+            "A management title over a team that does not yet exist",
+            "A role that is primarily hands-on delivery work"
+          ],
+          "how_to_build": [
+            "Have the US role written up carefully before the petition is drafted",
+            "Make sure the US entity's staffing genuinely supports a managerial layer"
+          ],
+          "time_to_build": "Typically weeks, once the role is agreed.",
+          "build_effort": "weeks"
+        },
+        {
+          "id": "eb1c.cond.employer_doing_business",
+          "kind": "condition",
+          "category": "employer",
+          "name": "The US employer has been doing business for at least one year",
+          "means": "The petitioning US employer generally must have been doing business — regular, systematic, continuous provision of goods or services — for at least one year before filing.",
+          "typically_counts": [
+            "Tax filings, audited accounts, payroll records, and contracts covering the year",
+            "Evidence of continuous operations rather than a single transaction"
+          ],
+          "typically_does_not_count": [
+            "A newly incorporated entity with no operating history",
+            "An agent or office presence with no actual business activity"
+          ],
+          "how_to_build": [
+            "Confirm the US entity's operating history and gather the records early",
+            "For a young US entity, waiting until the year is complete is often the practical answer"
+          ],
+          "time_to_build": "Time-based for a new entity; weeks to document for an established one.",
+          "build_effort": "weeks"
+        },
+        {
+          "id": "eb1c.cond.qualifying_relationship",
+          "kind": "condition",
+          "category": "employer",
+          "name": "A qualifying relationship between the two companies",
+          "means": "The US employer and the foreign employer must have a qualifying corporate relationship — parent, subsidiary, affiliate, or branch — and that relationship generally must continue to exist.",
+          "typically_counts": [
+            "Ownership and control documentation, share registers, and corporate charts",
+            "Evidence the relationship existed both at the time of the foreign work and at filing"
+          ],
+          "typically_does_not_count": [
+            "A commercial partnership, franchise, or client relationship with no common ownership or control",
+            "A relationship that ended after a restructuring or acquisition"
+          ],
+          "how_to_build": [
+            "Get the corporate structure documented by counsel, with ownership percentages",
+            "Restructurings and acquisitions can break this without anyone noticing — check it early"
+          ],
+          "time_to_build": "Typically weeks, and it depends on the company rather than on you.",
+          "build_effort": "weeks"
+        }
+      ]
+    }
+  ],
+
+  "strength_scale": [
+    {
+      "id": "not_started",
+      "label": "Not started",
+      "blurb": "Nothing here yet. Most people start here on most criteria."
+    },
+    {
+      "id": "in_progress",
+      "label": "In progress",
+      "blurb": "Something is underway — an application in, a paper drafted, a conversation started."
+    },
+    {
+      "id": "have_evidence",
+      "label": "I have something",
+      "blurb": "You have real evidence you could point to today, even if it is not your strongest."
+    },
+    {
+      "id": "strong",
+      "label": "Strong",
+      "blurb": "Well documented, independent, and you would be comfortable leading with it."
+    }
+  ]
+}
+''';

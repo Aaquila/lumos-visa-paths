@@ -29,7 +29,7 @@ from .models import IntakeFact, IntakeQuestion, IntakeRequest, IntakeResult
 from .options import DISCLAIMER, build_option_set, detect_goal
 from .pathways import PathwayGraph, load_graph
 
-log = logging.getLogger("pathfinder.intake")
+log = logging.getLogger("lumos.intake")
 
 MODEL = os.getenv("INTAKE_MODEL", "claude-opus-5")
 
@@ -45,7 +45,7 @@ MAX_TOKENS = 8000
 _UNKNOWN = "unknown"
 
 _SYSTEM = """\
-You are the intake reasoner for Pathfinder, a US immigration pathway tracker.
+You are the intake reasoner for Lumos, a US immigration pathway tracker.
 
 A person describes their immigration situation in their own words. You place \
 them on a fixed map of immigration statuses, and — when they say where they \

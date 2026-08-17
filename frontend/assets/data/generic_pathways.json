@@ -1,0 +1,2924 @@
+{
+  "meta": {
+    "title": "US Immigration Pathways — Generic Graph",
+    "purpose": "Generic (non-personal) node/edge graph for the Lumos pathway visualizer. Personal maps are built by overlaying a user's resolved status_node onto this graph and computing reachable vs. closed edges.",
+    "as_of": "2026-08-11",
+    "warning": "Numeric fields (dates, day-counts, caps, fees, wait times) change with policy and fiscal year. This file is a STRUCTURAL seed, not a source of truth for current numbers — every numeric field should be re-verified by the RAG layer against a live source before being shown to a user, and 'source_hint' fields below tell the ingester which USCIS/DOS page owns that number.",
+    "schema_version": "1.2",
+    "id_convention": "family.node — e.g. student.f1, employment_gc.eb2",
+    "schema_notes": {
+      "node.requirements": "What this status or filing actually requires. Structural conditions only — no numbers that drift with the fiscal year.",
+      "edge.optional": "true when the route skips a step that is commonly assumed to be mandatory but is not. F-1 → H-1B is optional:true because OPT and STEM OPT are conveniences, not prerequisites.",
+      "edge.note": "A caveat that changes whether the edge is usable, rather than a restatement of the trigger.",
+      "edge.type=priority_date_transfer": "A lateral move inside the immigrant-visa queue (EB-3 ↔ EB-2 interfiling, upgrading to EB-1). Retains the original priority date; it is not forward progress along the path and is laid out as a lateral edge.",
+      "node.work_option": "Optional block describing this node as a *recommendation option* rather than a graph position: plain-English summary, who it fits, eligibility signals, timeline, cost ballpark, sponsor/self-petition flags, country restrictions, risks and next steps. `base_fit` and `match` drive the ranking in backend/app/options.py. Nodes with base_fit 0 or an empty `goals` list are umbrella nodes and are never offered as an option on their own.",
+      "meta.strategy_notes": "Cross-cutting notes that are not tied to a single node — parallel filings, no-employer-needed routes, and how nationality changes the option set."
+    },
+    "rollout_order": [
+      {
+        "phase": 0,
+        "families": [
+          "student.*",
+          "temp_worker.h1b",
+          "employment_gc.eb2",
+          "employment_gc.eb2_niw",
+          "employment_gc.eb3",
+          "family_gc.marriage_aos",
+          "post_lpr.*"
+        ],
+        "note": "MVP for the Aug 16 submission — see PROJECT_PRD.md §3/§4 Phase 0"
+      },
+      {
+        "phase": 1,
+        "families": [
+          "extraordinary.o1",
+          "employment_gc.eb1"
+        ],
+        "note": "paired with the evidence tracker — see PROJECT_PRD.md §3b"
+      },
+      {
+        "phase": 2,
+        "families": [
+          "exchange.j1",
+          "employment_gc.eb5"
+        ],
+        "note": "see PROJECT_PRD.md §4 Phase 2"
+      },
+      {
+        "phase": 3,
+        "families": [
+          "family_gc.*",
+          "humanitarian.*",
+          "diversity.dv",
+          "intracompany.*",
+          "temp_worker.h2a",
+          "temp_worker.h2b",
+          "temp_worker.r1",
+          "extraordinary.p1",
+          "family_temp.k1",
+          "special_immigrant.sij"
+        ],
+        "note": "remaining categories, roughly in order of intersection frequency with phases 0-2 — see PROJECT_PRD.md §4 Phase 3"
+      },
+      {
+        "phase": 1,
+        "families": [
+          "temp_worker.h1b_cap_exempt",
+          "extraordinary.o1a",
+          "extraordinary.o1b",
+          "employment_gc.eb1a",
+          "employment_gc.eb1b",
+          "employment_gc.eb1c"
+        ],
+        "note": "the alternatives to H-1B that a broad 'I want to work in the US' goal must surface"
+      },
+      {
+        "phase": 3,
+        "families": [
+          "temp_worker.e3",
+          "temp_worker.h1b1",
+          "intracompany.l1a",
+          "intracompany.l1b",
+          "dependent.*"
+        ],
+        "note": "nationality-specific and dependent work authorization routes"
+      }
+    ],
+    "disclaimer": "Informational only, not legal advice. US immigration rules, fees, caps and processing times change often and outcomes are case-specific — verify anything here against the linked official source and, for a real filing, with a licensed immigration attorney.",
+    "strategy_notes": [
+      {
+        "id": "parallel_opt_h1b",
+        "title": "You can run more than one route at a time",
+        "body": "Nonimmigrant status and green card petitions are separate tracks. It is common to keep working on OPT or STEM OPT while an H-1B petition is pending, and equally common to have a self-petitioned EB-2 NIW or EB-1A in progress while holding H-1B or O-1. Being in one process does not close the others."
+      },
+      {
+        "id": "lottery_is_not_the_only_door",
+        "title": "The H-1B lottery is one door, not the building",
+        "body": "People who assume H-1B is the only way to work in the US most often miss four things: cap-exempt H-1B employers (universities, affiliated nonprofits, nonprofit and government research), O-1A, EB-2 NIW and EB-1A self-petitions, and the nationality-specific routes (TN, E-3, H-1B1). Three of those need no employer sponsorship at all."
+      },
+      {
+        "id": "no_employer_needed",
+        "title": "Routes that need no employer sponsor",
+        "body": "EB-1A, EB-2 NIW, E-2, EB-5 and (in a limited sense) a pending asylum EAD do not require a US employer to petition for you. O-1 still needs a US petitioner, but that petitioner can be an agent rather than a conventional employer."
+      },
+      {
+        "id": "dependent_authorization",
+        "title": "Household routes are easy to overlook",
+        "body": "If a spouse or partner qualifies for L-1, E-1/E-2/E-3, or an H-1B that reaches an approved I-140, the other spouse may be able to work for any employer on a dependent work authorization. For a two-person household this is sometimes the fastest route to one of you working."
+      },
+      {
+        "id": "country_matters",
+        "title": "Nationality changes the option set",
+        "body": "TN is Canada and Mexico only. E-3 is Australia only. H-1B1 is Chile and Singapore only. E-1 and E-2 depend on your country having a qualifying treaty with the US, and the list changes. Country of birth (not nationality) also drives green card priority date waits."
+      }
+    ]
+  },
+  "categories": [
+    {
+      "id": "student",
+      "label": "Student & post-study work (F-1 track)",
+      "type": "nonimmigrant"
+    },
+    {
+      "id": "exchange",
+      "label": "Exchange visitor (J-1)",
+      "type": "nonimmigrant"
+    },
+    {
+      "id": "temp_worker",
+      "label": "Temporary / specialty worker",
+      "type": "nonimmigrant"
+    },
+    {
+      "id": "intracompany",
+      "label": "Intracompany transfer & treaty trader/investor",
+      "type": "nonimmigrant"
+    },
+    {
+      "id": "extraordinary",
+      "label": "Extraordinary ability / athletes / entertainers",
+      "type": "nonimmigrant"
+    },
+    {
+      "id": "family_temp",
+      "label": "Fiancé(e) & family nonimmigrant",
+      "type": "nonimmigrant"
+    },
+    {
+      "id": "employment_gc",
+      "label": "Employment-based green card (EB-1..EB-5)",
+      "type": "immigrant"
+    },
+    {
+      "id": "family_gc",
+      "label": "Family-based green card",
+      "type": "immigrant"
+    },
+    {
+      "id": "diversity",
+      "label": "Diversity Visa (DV lottery)",
+      "type": "immigrant"
+    },
+    {
+      "id": "humanitarian",
+      "label": "Humanitarian protection",
+      "type": "humanitarian"
+    },
+    {
+      "id": "special_immigrant",
+      "label": "Special immigrant (EB-4 family)",
+      "type": "immigrant"
+    },
+    {
+      "id": "post_lpr",
+      "label": "Post-green-card (LPR maintenance & naturalization)",
+      "type": "post_lpr"
+    },
+    {
+      "id": "dependent",
+      "label": "Dependent / spousal work authorization",
+      "type": "nonimmigrant"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "student.f1",
+      "category": "student",
+      "name": "F-1 Student",
+      "description": "Full-time academic student at a SEVP-certified school. Status is tied to enrollment and a Form I-20; dependent status is F-2.",
+      "work_authorized": "Only on-campus by default; off-campus work requires CPT/OPT/economic-hardship authorization.",
+      "dual_intent": false,
+      "key_forms": [
+        "I-20",
+        "I-901 SEVIS fee"
+      ],
+      "recurring_deadlines": [
+        "SEVIS full-course-of-study compliance each term"
+      ],
+      "source_hint": "https://www.uscis.gov/working-in-the-united-states/students-and-exchange-visitors, https://studyinthestates.dhs.gov"
+    },
+    {
+      "id": "student.cpt",
+      "category": "student",
+      "name": "Curricular Practical Training (CPT)",
+      "description": "Off-campus training integral to the curriculum, authorized by the DSO while enrolled; does not require USCIS filing.",
+      "work_authorized": "Yes, employer- and term-specific; must be curriculum-integrated.",
+      "dual_intent": false,
+      "key_forms": [
+        "Updated I-20 with CPT authorization"
+      ],
+      "recurring_deadlines": [],
+      "source_hint": "https://studyinthestates.dhs.gov (CPT)",
+      "work_option": {
+        "option_category": "student-work",
+        "summary": "Work authorization for training that is an integral part of your US degree program, authorized by your school rather than USCIS.",
+        "who_it_fits": "Enrolled F-1 students whose program includes or requires practical training.",
+        "eligibility_signals": [
+          "Currently enrolled F-1 student at a SEVP-certified school",
+          "The employment is integral to the curriculum, as your DSO certifies",
+          "Authorization is employer- and term-specific"
+        ],
+        "typical_timeline": "Authorized by the DSO on an updated I-20, usually within days to weeks; no USCIS filing.",
+        "cost_ballpark": "Generally no USCIS fee. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": false,
+        "allows_self_petition": false,
+        "country_restricted": [],
+        "risk_notes": [
+          "Extensive full-time CPT can eliminate OPT eligibility at that education level — the commonly cited threshold is twelve months",
+          "It is tied to a specific employer and term"
+        ],
+        "next_steps": [
+          "Ask your DSO whether your program supports CPT and on what terms"
+        ],
+        "base_fit": 0.7,
+        "match": {
+          "requires": [
+            "student_f1"
+          ],
+          "boosts": [
+            "in_us"
+          ]
+        },
+        "goals": [
+          "work_in_us"
+        ]
+      }
+    },
+    {
+      "id": "student.opt_precompletion",
+      "category": "student",
+      "name": "Pre-Completion OPT",
+      "description": "Part-time (or full-time during breaks) practical training available before the program end date.",
+      "work_authorized": "Yes, part-time during the term.",
+      "dual_intent": false,
+      "key_forms": [
+        "I-765"
+      ],
+      "recurring_deadlines": [],
+      "source_hint": "https://www.uscis.gov/opt"
+    },
+    {
+      "id": "student.opt_postcompletion",
+      "category": "student",
+      "name": "Post-Completion OPT",
+      "description": "12 months of full-time practical training after program completion, in a field directly related to the degree. Optional — a graduate may go straight to H-1B, another status, or leave; OPT is not a prerequisite for anything downstream.",
+      "work_authorized": "Yes, full-time, employer must relate to field of study.",
+      "dual_intent": false,
+      "requirements": [
+        "Maintained F-1 status and completed (or be completing) the program",
+        "Employment directly related to the major field of study",
+        "I-765 approved and an EAD in hand before starting work — the DSO recommendation alone is not authorization",
+        "Not more than 12 months of full-time OPT already used at the same education level"
+      ],
+      "key_forms": [
+        "I-765",
+        "DSO SEVIS recommendation"
+      ],
+      "recurring_deadlines": [
+        "Apply within the USCIS-defined window around the program end date (commonly cited as up to 90 days before through 60 days after completion — verify against current 8 CFR 214.2(f) guidance)",
+        "90 cumulative days of unemployment limit"
+      ],
+      "source_hint": "https://www.uscis.gov/opt, https://studyinthestates.dhs.gov (unemployment counter)",
+      "work_option": {
+        "option_category": "student-work",
+        "summary": "Up to twelve months of full-time work after finishing a US degree, in a field related to that degree — no employer sponsorship of a petition needed.",
+        "who_it_fits": "People who are studying, or about to study, at a US school in F-1 status.",
+        "eligibility_signals": [
+          "Maintained F-1 status and completed (or completing) the program",
+          "The job is directly related to the major field of study",
+          "An approved I-765 and EAD in hand before starting work",
+          "Not more than the allowed full-time OPT already used at the same education level"
+        ],
+        "typical_timeline": "Applied for around the program end date; USCIS processing of the I-765 commonly runs a few months, so people generally file as early as the rules allow.",
+        "cost_ballpark": "One USCIS filing fee, paid by the applicant, typically a few hundred dollars. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": false,
+        "allows_self_petition": false,
+        "country_restricted": [],
+        "risk_notes": [
+          "There is a cumulative unemployment limit during OPT — running past it can end the authorization",
+          "It is time-limited and is not by itself a route to permanent residence",
+          "Requires already being (or becoming) an F-1 student, which is a whole separate application from abroad"
+        ],
+        "next_steps": [
+          "If you are already an F-1 student, talk to your DSO about the filing window",
+          "If you are not, price out whether a US degree is a route you actually want before treating this as the plan"
+        ],
+        "base_fit": 0.9,
+        "match": {
+          "requires": [
+            "student_f1"
+          ],
+          "boosts": [
+            "in_us"
+          ]
+        },
+        "goals": [
+          "work_in_us"
+        ],
+        "parallel_notes": "You can keep working on OPT while an H-1B petition is pending, and cap-gap may extend the authorization to the H-1B start date."
+      }
+    },
+    {
+      "id": "student.stem_opt",
+      "category": "student",
+      "name": "STEM OPT Extension",
+      "description": "24-month extension of post-completion OPT for graduates of a qualifying STEM degree, employed by an E-Verify employer under a Form I-983 training plan. Optional, and only reachable from post-completion OPT — it extends that authorization rather than replacing it.",
+      "work_authorized": "Yes, full-time, STEM-related, E-Verify employer required.",
+      "dual_intent": false,
+      "requirements": [
+        "Currently in a period of valid post-completion OPT (this is an extension, not a fresh grant)",
+        "Degree on the DHS STEM Designated Degree Program List",
+        "Employer enrolled in E-Verify and signing a Form I-983 training plan",
+        "At least 20 hours/week of paid work with the sponsoring employer"
+      ],
+      "key_forms": [
+        "I-765",
+        "I-983 Training Plan"
+      ],
+      "recurring_deadlines": [
+        "File I-765 within 60 days of the DSO's STEM OPT recommendation in SEVIS",
+        "12-month self-evaluation / employer validation",
+        "24-month self-evaluation / employer validation",
+        "150 cumulative days of unemployment limit (aggregate across all OPT)",
+        "Report employer or address changes within 10 days"
+      ],
+      "source_hint": "https://studyinthestates.dhs.gov (STEM OPT hub), https://www.uscis.gov/stem-opt",
+      "work_option": {
+        "option_category": "student-work",
+        "summary": "A further extension of post-completion OPT — commonly cited as 24 months — for qualifying STEM graduates working for an E-Verify employer.",
+        "who_it_fits": "STEM graduates already on post-completion OPT who want more time to try the H-1B lottery or build a green card case.",
+        "eligibility_signals": [
+          "Currently in a valid period of post-completion OPT — this extends it rather than replacing it",
+          "Degree appears on the DHS STEM Designated Degree Program List",
+          "Employer is enrolled in E-Verify and will sign a Form I-983 training plan",
+          "Paid work of at least the required weekly hours with the sponsoring employer"
+        ],
+        "typical_timeline": "Filed before the current OPT expires; the extension runs on from it. Reporting obligations recur throughout.",
+        "cost_ballpark": "One USCIS filing fee, applicant-paid, typically a few hundred dollars. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": false,
+        "allows_self_petition": false,
+        "country_restricted": [],
+        "risk_notes": [
+          "Only available if your specific degree is on the STEM list and your employer will use E-Verify and sign the training plan",
+          "Aggregate unemployment limits and 10-day reporting duties apply"
+        ],
+        "next_steps": [
+          "Check your degree's CIP code against the DHS STEM list",
+          "Ask your employer whether they are enrolled in E-Verify"
+        ],
+        "base_fit": 0.85,
+        "match": {
+          "requires": [
+            "on_opt",
+            "stem_degree"
+          ],
+          "boosts": [
+            "us_employer"
+          ]
+        },
+        "goals": [
+          "work_in_us"
+        ],
+        "parallel_notes": "The extra time is most often used to get two or three more attempts at the H-1B lottery, or to start a PERM or NIW case."
+      }
+    },
+    {
+      "id": "student.cap_gap",
+      "category": "student",
+      "name": "Cap-Gap Extension",
+      "description": "Automatic extension of F-1/OPT status and work authorization bridging the gap between OPT/STEM-OPT expiration and an October 1 H-1B start date, for students with a timely-filed cap-subject H-1B petition.",
+      "work_authorized": "Yes, continuation of prior OPT terms while the H-1B petition is pending/approved.",
+      "dual_intent": false,
+      "key_forms": [],
+      "recurring_deadlines": [
+        "Ends immediately if the H-1B petition is denied, withdrawn, or revoked"
+      ],
+      "source_hint": "https://studyinthestates.dhs.gov (cap-gap)",
+      "work_option": {
+        "option_category": "student-work",
+        "summary": "An automatic bridge that can keep F-1 status, and in many cases work authorization, alive between an expiring OPT period and an October 1 H-1B start date.",
+        "who_it_fits": "F-1 students with a timely-filed cap-subject H-1B petition whose OPT would otherwise run out first.",
+        "eligibility_signals": [
+          "In F-1 status, typically on post-completion OPT or STEM OPT",
+          "A cap-subject H-1B petition requesting change of status was timely filed while status was valid"
+        ],
+        "typical_timeline": "Runs from the OPT end date to the H-1B start date; it is not separately applied for.",
+        "cost_ballpark": "No separate fee. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": true,
+        "allows_self_petition": false,
+        "country_restricted": [],
+        "risk_notes": [
+          "Ends immediately if the H-1B petition is denied, withdrawn or revoked",
+          "Where it extends status without work authorization, working would be unauthorized — the distinction matters"
+        ],
+        "next_steps": [
+          "Ask your DSO to update your I-20 once the H-1B receipt notice arrives"
+        ],
+        "base_fit": 0.6,
+        "match": {
+          "requires": [
+            "on_opt",
+            "us_employer"
+          ],
+          "boosts": []
+        },
+        "goals": [
+          "work_in_us"
+        ]
+      }
+    },
+    {
+      "id": "exchange.j1",
+      "category": "exchange",
+      "name": "J-1 Exchange Visitor",
+      "description": "Program-sponsored exchange status (research scholar, intern, trainee, au pair, etc.). Some categories carry a 2-year home-residency requirement (INA 212(e)) that must be satisfied or waived before certain future statuses.",
+      "work_authorized": "Program-defined; dependents are J-2, who may apply separately for work authorization.",
+      "dual_intent": false,
+      "key_forms": [
+        "DS-2019"
+      ],
+      "recurring_deadlines": [
+        "Program end date; any home-residency waiver process before status change"
+      ],
+      "source_hint": "https://j1visa.state.gov",
+      "work_option": {
+        "option_category": "nonimmigrant work",
+        "summary": "Program-sponsored exchange status used for research scholars, interns, trainees, physicians and similar roles — sponsored by a designated program, not simply by an employer.",
+        "who_it_fits": "Researchers, trainees, interns and academic visitors with a designated US program sponsor.",
+        "eligibility_signals": [
+          "A designated exchange program sponsor will issue a DS-2019",
+          "The activity fits one of the defined J-1 categories",
+          "Program-specific English, insurance and funding conditions are met"
+        ],
+        "typical_timeline": "Driven by the program's own calendar; DS-2019 issuance plus consular appointment wait.",
+        "cost_ballpark": "SEVIS fee plus visa application fee, often program-subsidised. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": false,
+        "allows_self_petition": false,
+        "country_restricted": [],
+        "risk_notes": [
+          "Some categories carry a two-year home-residency requirement under INA 212(e) that must be satisfied or waived before certain later statuses or a green card — check the DS-2019 and consular annotation, and note that the annotation is not always the final word",
+          "Work is limited to the program's defined activity"
+        ],
+        "next_steps": [
+          "Ask the host institution which J-1 category they would use",
+          "Ask early and specifically whether 212(e) would apply to you"
+        ],
+        "base_fit": 0.7,
+        "match": {
+          "requires": [
+            "exchange_program"
+          ],
+          "boosts": []
+        },
+        "goals": [
+          "work_in_us"
+        ]
+      }
+    },
+    {
+      "id": "temp_worker.h1b",
+      "category": "temp_worker",
+      "name": "H-1B Specialty Occupation",
+      "description": "Employer-sponsored status for roles requiring a bachelor's degree or equivalent in a specific specialty. Cap-subject unless the employer is cap-exempt (e.g., university, nonprofit research). Recognized as dual intent — pursuing a green card does not itself jeopardize H-1B status. Reachable directly from F-1 as well as from OPT or STEM OPT: the practical-training steps are optional, not prerequisites.",
+      "work_authorized": "Yes, employer- and role-specific; H-4 dependents may qualify for work authorization in limited circumstances.",
+      "dual_intent": true,
+      "requirements": [
+        "A US employer willing to petition — there is no self-petition route",
+        "The role is a specialty occupation and the applicant holds the required degree (or equivalent)",
+        "Certified LCA from DOL before the I-129 is filed",
+        "Selection in the electronic registration lottery, unless the employer is cap-exempt"
+      ],
+      "key_forms": [
+        "I-129",
+        "LCA (ETA-9035)"
+      ],
+      "recurring_deadlines": [
+        "Electronic registration window (commonly early-to-mid March)",
+        "Selection notification (commonly by end of March)",
+        "Petition filing window for selected registrants (commonly April 1 – June 30)",
+        "Earliest cap-subject start date: October 1",
+        "6-year maximum stay absent an extension basis (e.g., pending/approved I-140 or PERM)"
+      ],
+      "source_hint": "https://www.uscis.gov/h-1b-electronic-registration-process",
+      "work_option": {
+        "option_category": "nonimmigrant work",
+        "summary": "The main employer-sponsored work visa for jobs that normally require a bachelor's degree in a specific field — but cap-subject petitions generally have to be selected in an annual lottery first.",
+        "who_it_fits": "People with a US job offer in a degree-level specialty role, working for an employer that is not cap-exempt.",
+        "eligibility_signals": [
+          "A US employer is willing to file and pay for the petition — there is no self-petition route",
+          "The role typically requires at least a bachelor's degree in a specific specialty, and you hold it (or an evaluated equivalent)",
+          "Selection in the electronic registration lottery, unless the employer is cap-exempt",
+          "The employer can obtain a certified Labor Condition Application from DOL"
+        ],
+        "typical_timeline": "Registration is typically in early spring, selection soon after, and cap-subject employment generally cannot start before October 1 — so from first registration to a start date is usually the better part of a year. Premium processing can shorten the petition decision itself.",
+        "cost_ballpark": "Employer-paid, typically low thousands of dollars in government fees plus legal fees, with larger totals for bigger employers and optional premium processing. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": true,
+        "allows_self_petition": false,
+        "country_restricted": [],
+        "risk_notes": [
+          "The lottery is the single biggest uncertainty — registration is not selection, and many registrants are not selected in a given year",
+          "Status is tied to the sponsoring employer; losing the job starts a limited grace period",
+          "There is a maximum period of stay (commonly cited as six years) absent an extension basis tied to a green card process"
+        ],
+        "next_steps": [
+          "Confirm with the employer whether they have sponsored H-1B before and whether they are cap-exempt",
+          "Ask them to register you in the next electronic registration window",
+          "In parallel, look at routes that do not depend on the lottery (O-1A, EB-2 NIW, cap-exempt employers, TN/E-3/H-1B1 if your nationality qualifies)"
+        ],
+        "base_fit": 0.95,
+        "match": {
+          "requires": [
+            "us_employer",
+            "bachelors_degree"
+          ],
+          "boosts": [
+            "in_us",
+            "stem_degree",
+            "advanced_degree"
+          ]
+        },
+        "goals": [
+          "work_in_us"
+        ],
+        "parallel_notes": "Commonly filed while the person is working on OPT or STEM OPT; cap-gap can bridge the two if the petition is timely filed."
+      }
+    },
+    {
+      "id": "temp_worker.h2a",
+      "category": "temp_worker",
+      "name": "H-2A Temporary Agricultural Worker",
+      "description": "Employer-sponsored temporary/seasonal agricultural labor, requires DOL temporary labor certification.",
+      "work_authorized": "Yes, employer- and job-specific, seasonal.",
+      "dual_intent": false,
+      "key_forms": [
+        "I-129",
+        "DOL temporary labor certification"
+      ],
+      "recurring_deadlines": [
+        "Certification and petition tied to the specific season's start date"
+      ],
+      "source_hint": "https://www.uscis.gov/h-2a"
+    },
+    {
+      "id": "temp_worker.h2b",
+      "category": "temp_worker",
+      "name": "H-2B Temporary Non-Agricultural Worker",
+      "description": "Employer-sponsored temporary non-agricultural labor for a one-time, seasonal, peak-load, or intermittent need; subject to a semi-annual numerical cap.",
+      "work_authorized": "Yes, employer- and job-specific, seasonal.",
+      "dual_intent": false,
+      "key_forms": [
+        "I-129",
+        "DOL temporary labor certification"
+      ],
+      "recurring_deadlines": [
+        "Semi-annual cap windows (Oct 1 and Apr 1 halves of the fiscal year)"
+      ],
+      "source_hint": "https://www.uscis.gov/h-2b"
+    },
+    {
+      "id": "intracompany.l1",
+      "category": "intracompany",
+      "name": "L-1 Intracompany Transferee",
+      "description": "Transfer of an executive/manager (L-1A) or specialized-knowledge employee (L-1B) from a qualifying foreign affiliate to a related US entity. Recognized as dual intent.",
+      "work_authorized": "Yes, for the sponsoring employer.",
+      "dual_intent": true,
+      "key_forms": [
+        "I-129",
+        "I-129S for blanket petitions"
+      ],
+      "recurring_deadlines": [
+        "L-1A: up to 7 years max; L-1B: up to 5 years max"
+      ],
+      "source_hint": "https://www.uscis.gov/l-1",
+      "work_option": {
+        "option_category": "nonimmigrant work",
+        "summary": "Umbrella for the intracompany transfer categories — see L-1A (executives and managers) and L-1B (specialized knowledge).",
+        "who_it_fits": "See the specific L-1A / L-1B entries.",
+        "eligibility_signals": [
+          "Varies by sub-category"
+        ],
+        "typical_timeline": "Varies by sub-category.",
+        "cost_ballpark": "Varies by sub-category. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": true,
+        "allows_self_petition": false,
+        "country_restricted": [],
+        "risk_notes": [
+          "This node is an umbrella; the sub-category entries carry the real detail"
+        ],
+        "next_steps": [
+          "Read the L-1A and L-1B entries"
+        ],
+        "base_fit": 0.0,
+        "match": {
+          "requires": [],
+          "boosts": []
+        },
+        "goals": []
+      }
+    },
+    {
+      "id": "intracompany.e1",
+      "category": "intracompany",
+      "name": "E-1 Treaty Trader",
+      "description": "For nationals of a treaty country carrying on substantial trade principally between the US and that country.",
+      "work_authorized": "Yes, for the treaty enterprise.",
+      "dual_intent": false,
+      "key_forms": [
+        "Consular DS-160 or I-129 change/extension"
+      ],
+      "recurring_deadlines": [
+        "Renewable indefinitely in increments while trade continues"
+      ],
+      "source_hint": "https://www.uscis.gov/e-1",
+      "work_option": {
+        "option_category": "investor",
+        "summary": "For nationals of a country that has a trade treaty with the US, carrying on substantial trade principally between the US and that country.",
+        "who_it_fits": "Owners, essential employees or executives of a business doing substantial ongoing trade with the US.",
+        "eligibility_signals": [
+          "You hold the nationality of a country on the State Department treaty list",
+          "The enterprise has the same treaty-country nationality",
+          "Trade is substantial, continuing, and principally between the US and the treaty country"
+        ],
+        "typical_timeline": "Consular applications are often measured in weeks to months once the business record is assembled; a change of status inside the US goes through USCIS instead.",
+        "cost_ballpark": "Visa or petition fees plus significant legal and accounting work to document the trade. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": false,
+        "allows_self_petition": true,
+        "country_restricted": [
+          "Treaty trader countries only — the State Department maintains the current list and it changes"
+        ],
+        "risk_notes": [
+          "Entirely dependent on your nationality being on the treaty list at the time of filing",
+          "'Substantial' trade is judged case by case, not by a published number",
+          "Not a dual-intent category, so pairing it with a green card plan needs care"
+        ],
+        "next_steps": [
+          "Check your nationality against the State Department treaty country list",
+          "Assemble evidence of the volume and continuity of US trade"
+        ],
+        "base_fit": 0.7,
+        "match": {
+          "requires": [
+            "treaty_country",
+            "trade_or_business"
+          ],
+          "boosts": []
+        },
+        "goals": [
+          "work_in_us"
+        ]
+      }
+    },
+    {
+      "id": "intracompany.e2",
+      "category": "intracompany",
+      "name": "E-2 Treaty Investor",
+      "description": "For nationals of a treaty country who have invested, or are actively investing, substantial capital in a US enterprise they direct/develop.",
+      "work_authorized": "Yes, for the invested enterprise.",
+      "dual_intent": false,
+      "key_forms": [
+        "Consular DS-160 or I-129 change/extension"
+      ],
+      "recurring_deadlines": [
+        "Renewable indefinitely in increments while investment/enterprise continues"
+      ],
+      "source_hint": "https://www.uscis.gov/e-2",
+      "work_option": {
+        "option_category": "investor",
+        "summary": "A no-employer-needed route: nationals of a treaty country who invest a substantial amount in a US business they direct and develop.",
+        "who_it_fits": "Founders and investors from treaty countries who can put real capital at risk in a US operating business.",
+        "eligibility_signals": [
+          "You hold the nationality of a country on the State Department E-2 treaty list",
+          "Capital is already invested or irrevocably committed, and is at risk",
+          "The business is real and operating, not marginal — it must generate more than a living for the investor",
+          "You will direct and develop the enterprise"
+        ],
+        "typical_timeline": "Once the business and investment are in place, consular processing is often measured in weeks to a few months; building the business case usually takes far longer than the filing.",
+        "cost_ballpark": "The investment itself is the dominant cost and there is no published statutory minimum — 'substantial' is judged relative to the business. Filing and legal costs sit on top. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": false,
+        "allows_self_petition": true,
+        "country_restricted": [
+          "Treaty investor countries only — the State Department maintains the current list and it changes"
+        ],
+        "risk_notes": [
+          "Nationality-dependent: no treaty, no E-2, regardless of how good the business is",
+          "Capital must genuinely be at risk; loans secured by the business assets generally do not count",
+          "Renewable indefinitely in increments but it does not itself lead to a green card"
+        ],
+        "next_steps": [
+          "Check your nationality against the treaty list",
+          "Model whether the business can support more than a marginal living"
+        ],
+        "base_fit": 0.8,
+        "match": {
+          "requires": [
+            "treaty_country",
+            "investment_capital"
+          ],
+          "boosts": [
+            "business_owner"
+          ]
+        },
+        "goals": [
+          "work_in_us"
+        ]
+      }
+    },
+    {
+      "id": "intracompany.tn",
+      "category": "intracompany",
+      "name": "TN Professional (USMCA)",
+      "description": "For Canadian/Mexican citizens in designated professional occupations under USMCA; Canadians may apply directly at the border/port of entry.",
+      "work_authorized": "Yes, for the sponsoring employer, in a listed profession.",
+      "dual_intent": false,
+      "key_forms": [
+        "I-129 (Mexican nationals / change of status) or USMCA professional documentation at port of entry (Canadians)"
+      ],
+      "recurring_deadlines": [
+        "Renewable in up-to-3-year increments, no fixed maximum stay"
+      ],
+      "source_hint": "https://www.uscis.gov/tn-nafta-professionals",
+      "work_option": {
+        "option_category": "nonimmigrant work",
+        "summary": "A fast, lottery-free work status for Canadian and Mexican citizens in a listed USMCA profession.",
+        "who_it_fits": "Canadian and Mexican professionals in one of the occupations on the USMCA list.",
+        "eligibility_signals": [
+          "Canadian or Mexican citizenship (permanent residents of those countries do not qualify)",
+          "The job is on the USMCA professions list and you hold the credential that list specifies",
+          "A US employer offer letter describing the role and the temporary need"
+        ],
+        "typical_timeline": "Canadians can commonly apply at a port of entry and get a same-day decision; Mexican nationals generally apply at a consulate. Change of status inside the US goes through USCIS and takes longer.",
+        "cost_ballpark": "Low — a port-of-entry or consular fee rather than a petition fee, plus legal help if used. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": true,
+        "allows_self_petition": false,
+        "country_restricted": [
+          "Canada",
+          "Mexico"
+        ],
+        "risk_notes": [
+          "The occupation list is closed — a role that does not map cleanly onto a listed profession is a common refusal reason",
+          "Not a dual-intent category, so an obvious green card plan can complicate renewals and entries",
+          "Renewable indefinitely in increments, but each entry is a fresh discretionary decision"
+        ],
+        "next_steps": [
+          "Match your job title and duties against the USMCA professions list",
+          "Have the employer draft a support letter tracking that profession's wording"
+        ],
+        "base_fit": 0.9,
+        "match": {
+          "requires": [
+            "canada_mexico",
+            "us_employer"
+          ],
+          "boosts": []
+        },
+        "goals": [
+          "work_in_us"
+        ]
+      }
+    },
+    {
+      "id": "extraordinary.o1",
+      "category": "extraordinary",
+      "name": "O-1 Extraordinary Ability",
+      "description": "For individuals with extraordinary ability in sciences, arts, education, business, or athletics, or extraordinary achievement in film/TV, with US employer or agent sponsorship.",
+      "work_authorized": "Yes, for the sponsoring employer/agent and the specific event/engagement.",
+      "dual_intent": "de facto (no explicit intent requirement, commonly used alongside green card pursuit)",
+      "key_forms": [
+        "I-129",
+        "advisory opinion/consultation letter"
+      ],
+      "recurring_deadlines": [
+        "Initial period up to 3 years, extensions in up to 1-year increments"
+      ],
+      "source_hint": "https://www.uscis.gov/o-1",
+      "work_option": {
+        "option_category": "nonimmigrant work",
+        "summary": "Umbrella for O-1 — see O-1A (sciences, education, business, athletics) and O-1B (arts, film and television).",
+        "who_it_fits": "See the specific O-1A / O-1B entries.",
+        "eligibility_signals": [
+          "Varies by sub-category"
+        ],
+        "typical_timeline": "Varies by sub-category.",
+        "cost_ballpark": "Varies by sub-category. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": true,
+        "allows_self_petition": false,
+        "country_restricted": [],
+        "risk_notes": [
+          "This node is an umbrella; the sub-category entries carry the real detail"
+        ],
+        "next_steps": [
+          "Read the O-1A and O-1B entries"
+        ],
+        "base_fit": 0.0,
+        "match": {
+          "requires": [],
+          "boosts": []
+        },
+        "goals": []
+      }
+    },
+    {
+      "id": "extraordinary.p1",
+      "category": "extraordinary",
+      "name": "P-1 Athlete/Entertainment Group",
+      "description": "For internationally recognized athletes or members of an internationally recognized entertainment group.",
+      "work_authorized": "Yes, for the specific event/competition/performance.",
+      "dual_intent": false,
+      "key_forms": [
+        "I-129"
+      ],
+      "recurring_deadlines": [
+        "Tied to season/event; extensions available"
+      ],
+      "source_hint": "https://www.uscis.gov/p-1"
+    },
+    {
+      "id": "temp_worker.r1",
+      "category": "temp_worker",
+      "name": "R-1 Religious Worker",
+      "description": "For ministers and other religious workers coming to work for a qualifying nonprofit religious organization.",
+      "work_authorized": "Yes, for the sponsoring religious organization.",
+      "dual_intent": "de facto (commonly used as a bridge to the EB-4 religious worker green card)",
+      "key_forms": [
+        "I-129"
+      ],
+      "recurring_deadlines": [
+        "Initial period up to 30 months, extendable up to a 5-year total max"
+      ],
+      "source_hint": "https://www.uscis.gov/r-1"
+    },
+    {
+      "id": "family_temp.k1",
+      "category": "family_temp",
+      "name": "K-1 Fiancé(e) Visa",
+      "description": "For the foreign-citizen fiancé(e) of a US citizen, to enter and marry within 90 days, then adjust status.",
+      "work_authorized": "May apply for an EAD after entry.",
+      "dual_intent": "immigrant intent expected",
+      "key_forms": [
+        "I-129F",
+        "later I-485"
+      ],
+      "recurring_deadlines": [
+        "Must marry within 90 days of admission or depart"
+      ],
+      "source_hint": "https://www.uscis.gov/k-1"
+    },
+    {
+      "id": "employment_gc.eb1",
+      "category": "employment_gc",
+      "name": "EB-1 Priority Worker",
+      "description": "Extraordinary ability (EB-1A, self-petition possible), outstanding professors/researchers (EB-1B), or multinational executives/managers (EB-1C). No PERM labor certification required.",
+      "work_authorized": "Full authorization once adjustment of status/immigrant visa is granted.",
+      "dual_intent": true,
+      "key_forms": [
+        "I-140",
+        "I-485 or consular DS-260"
+      ],
+      "recurring_deadlines": [
+        "Visa Bulletin priority-date monitoring (historically current or near-current for most countries)"
+      ],
+      "source_hint": "https://www.uscis.gov/eb-1",
+      "work_option": {
+        "option_category": "immigrant",
+        "summary": "Umbrella for the priority-worker green card categories — see EB-1A, EB-1B and EB-1C for the three distinct routes.",
+        "who_it_fits": "See the specific EB-1A / EB-1B / EB-1C entries.",
+        "eligibility_signals": [
+          "Varies by sub-category — EB-1A, EB-1B or EB-1C"
+        ],
+        "typical_timeline": "Varies by sub-category.",
+        "cost_ballpark": "Varies by sub-category. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": false,
+        "allows_self_petition": true,
+        "country_restricted": [],
+        "risk_notes": [
+          "This node is an umbrella; the sub-category entries carry the real detail"
+        ],
+        "next_steps": [
+          "Read the EB-1A, EB-1B and EB-1C entries"
+        ],
+        "base_fit": 0.0,
+        "match": {
+          "requires": [],
+          "boosts": []
+        },
+        "goals": []
+      }
+    },
+    {
+      "id": "employment_gc.eb2",
+      "category": "employment_gc",
+      "name": "EB-2 — PERM route",
+      "description": "The employer-sponsored route into EB-2: a US employer tests the labor market through PERM, then files the I-140. Requires a permanent job offer in a role that genuinely requires an advanced degree (or a bachelor's plus 5 years of progressive experience), or exceptional ability. The separate National Interest Waiver route skips both the job offer and PERM — see EB-2 NIW.",
+      "work_authorized": "Full authorization once adjustment of status/immigrant visa is granted; the I-140 itself confers no status or work authorization.",
+      "dual_intent": true,
+      "requirements": [
+        "A permanent, full-time job offer from a US employer willing to sponsor",
+        "The role must actually require an advanced degree, or a bachelor's plus 5 years of progressive post-baccalaureate experience",
+        "Approved PERM labor certification (DOL market test + prevailing wage determination) before the I-140",
+        "Priority date established by the PERM filing, then a current Visa Bulletin date before I-485/DS-260"
+      ],
+      "key_forms": [
+        "PERM ETA-9089",
+        "I-140",
+        "I-485 or consular DS-260"
+      ],
+      "recurring_deadlines": [
+        "Visa Bulletin priority-date monitoring — historically significant backlogs for India and China",
+        "I-140 must be filed within the PERM certification's validity window"
+      ],
+      "source_hint": "https://www.uscis.gov/eb-2, https://flag.dol.gov (PERM)",
+      "work_option": {
+        "option_category": "immigrant",
+        "summary": "The classic employer-sponsored green card: the employer tests the US labour market through PERM, then petitions for you.",
+        "who_it_fits": "People with a permanent job offer in a role that genuinely requires an advanced degree, or a bachelor's plus progressive experience.",
+        "eligibility_signals": [
+          "A permanent, full-time US job offer from an employer willing to sponsor",
+          "The role genuinely requires an advanced degree, or a bachelor's plus the required years of progressive experience",
+          "Approved PERM labor certification before the I-140",
+          "A current Visa Bulletin priority date before the final step"
+        ],
+        "typical_timeline": "PERM alone commonly runs many months to years including recruitment and any audit; the I-140 and then the priority date queue follow. Plan in years, not months.",
+        "cost_ballpark": "Employer-paid by rule for the PERM stage; total employer cost commonly runs to five figures with legal fees. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": true,
+        "allows_self_petition": false,
+        "country_restricted": [],
+        "risk_notes": [
+          "You are dependent on one employer's continued willingness for a long time",
+          "Priority date backlogs are severe for some countries of birth",
+          "Job changes mid-process have rules of their own (portability) that are easy to get wrong"
+        ],
+        "next_steps": [
+          "Ask the employer directly whether and when they start green card sponsorship",
+          "Get your degree and experience documented while it is easy to reach former employers"
+        ],
+        "base_fit": 0.8,
+        "match": {
+          "requires": [
+            "us_employer",
+            "advanced_degree"
+          ],
+          "boosts": []
+        },
+        "goals": [
+          "work_in_us",
+          "green_card"
+        ]
+      }
+    },
+    {
+      "id": "employment_gc.eb2_niw",
+      "category": "employment_gc",
+      "name": "EB-2 — National Interest Waiver",
+      "description": "The self-petitioned route into EB-2. The applicant asks USCIS to waive the job-offer and PERM requirements because their work is in the national interest, assessed under the three-prong Matter of Dhanasar framework. Modelled as its own node because the evidence and filing mechanics differ entirely from the PERM route, even though both land in the same EB-2 preference queue.",
+      "work_authorized": "Full authorization once adjustment of status/immigrant visa is granted. No employer tie at any stage — the petition belongs to the person.",
+      "dual_intent": true,
+      "requirements": [
+        "Qualify for EB-2 in the first place: advanced degree, or exceptional ability",
+        "Dhanasar prong 1 — the proposed endeavour has substantial merit and national importance",
+        "Dhanasar prong 2 — the applicant is well positioned to advance it",
+        "Dhanasar prong 3 — on balance, it benefits the US to waive the job offer and labor certification",
+        "No job offer, no PERM, no employer sponsor required"
+      ],
+      "key_forms": [
+        "I-140 with I-140 Supplement / NIW evidence",
+        "I-485 or consular DS-260"
+      ],
+      "recurring_deadlines": [
+        "Visa Bulletin priority-date monitoring — same EB-2 queue as the PERM route",
+        "RFE response window if USCIS challenges the Dhanasar analysis"
+      ],
+      "source_hint": "https://www.uscis.gov/eb-2, https://www.uscis.gov/policy-manual/volume-6-part-f-chapter-5",
+      "work_option": {
+        "option_category": "immigrant",
+        "summary": "The self-petitioned green card route: you ask USCIS to waive the job offer and PERM because your work is in the national interest. No employer needed at any stage.",
+        "who_it_fits": "Researchers, founders, engineers, clinicians and others whose work has demonstrable national importance and a track record behind it.",
+        "eligibility_signals": [
+          "Qualify for EB-2 to begin with — an advanced degree, or exceptional ability",
+          "The proposed endeavour has substantial merit and national importance (Dhanasar prong 1)",
+          "You are well positioned to advance it — record, plan, funding, adoption (prong 2)",
+          "On balance it benefits the US to waive the job offer and labor certification (prong 3)"
+        ],
+        "typical_timeline": "Building the petition commonly takes months; USCIS adjudication of the I-140 varies widely, with premium processing available. The green card itself then waits on the Visa Bulletin, which for some countries of birth is a multi-year queue.",
+        "cost_ballpark": "I-140 and later adjustment fees plus substantial attorney time — the evidence package is the expensive part. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": false,
+        "allows_self_petition": true,
+        "country_restricted": [],
+        "risk_notes": [
+          "This is the route most often missed by people who assume H-1B is the only option — but it is evidence-heavy and RFEs are common",
+          "An approved I-140 is not status and not work authorization on its own",
+          "Priority date backlogs depend heavily on country of birth"
+        ],
+        "next_steps": [
+          "Inventory your record against the three Dhanasar prongs honestly",
+          "Get a specialist opinion on whether the endeavour framing is strong enough before spending on the filing"
+        ],
+        "base_fit": 0.85,
+        "match": {
+          "requires": [
+            "advanced_degree",
+            "strong_record"
+          ],
+          "boosts": [
+            "stem_degree",
+            "extraordinary_evidence"
+          ]
+        },
+        "goals": [
+          "work_in_us",
+          "green_card"
+        ],
+        "parallel_notes": "Frequently filed while the person is on OPT, H-1B or O-1 — it runs in parallel with a nonimmigrant status rather than replacing it."
+      }
+    },
+    {
+      "id": "employment_gc.eb3",
+      "category": "employment_gc",
+      "name": "EB-3 Skilled Workers / Professionals / Other Workers",
+      "description": "Skilled workers (2+ years training/experience), professionals (US bachelor's or equivalent), and other workers (unskilled, <2 years training). Requires PERM labor certification.",
+      "work_authorized": "Full authorization once adjustment of status/immigrant visa is granted.",
+      "dual_intent": true,
+      "key_forms": [
+        "PERM ETA-9089",
+        "I-140",
+        "I-485 or consular DS-260"
+      ],
+      "recurring_deadlines": [
+        "Visa Bulletin priority-date monitoring — historically the most backlogged employment category for most countries"
+      ],
+      "source_hint": "https://www.uscis.gov/eb-3",
+      "work_option": {
+        "option_category": "immigrant",
+        "summary": "The employer-sponsored green card for skilled workers, professionals and some less-skilled roles — also PERM-based.",
+        "who_it_fits": "People with a permanent US job offer that does not require an advanced degree.",
+        "eligibility_signals": [
+          "A permanent, full-time US job offer from a sponsoring employer",
+          "Skilled worker (typically two or more years of training or experience), professional with a bachelor's, or other worker",
+          "Approved PERM labor certification, then the I-140"
+        ],
+        "typical_timeline": "Same PERM-then-queue shape as EB-2; historically among the more backlogged categories for many countries.",
+        "cost_ballpark": "Employer-paid PERM plus petition and adjustment fees. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": true,
+        "allows_self_petition": false,
+        "country_restricted": [],
+        "risk_notes": [
+          "Long dependence on a single employer",
+          "Backlogs vary by country of birth and by sub-category"
+        ],
+        "next_steps": [
+          "Confirm which category the employer would file under and when"
+        ],
+        "base_fit": 0.75,
+        "match": {
+          "requires": [
+            "us_employer"
+          ],
+          "boosts": []
+        },
+        "goals": [
+          "work_in_us",
+          "green_card"
+        ]
+      }
+    },
+    {
+      "id": "employment_gc.eb4",
+      "category": "special_immigrant",
+      "name": "EB-4 Special Immigrant",
+      "description": "Religious workers, Special Immigrant Juveniles (SIJ), certain international-organization employees, and other narrowly defined special-immigrant classes.",
+      "work_authorized": "Full authorization once adjustment of status/immigrant visa is granted.",
+      "dual_intent": true,
+      "key_forms": [
+        "I-360",
+        "I-485 or consular DS-260"
+      ],
+      "recurring_deadlines": [
+        "Visa Bulletin priority-date monitoring; religious-worker program subject to periodic Congressional reauthorization"
+      ],
+      "source_hint": "https://www.uscis.gov/eb-4"
+    },
+    {
+      "id": "employment_gc.eb5",
+      "category": "employment_gc",
+      "name": "EB-5 Immigrant Investor",
+      "description": "Investment of the statutory minimum capital (standard or, if in a Targeted Employment Area / rural / infrastructure project, a reduced reserved-visa threshold) creating the required number of US jobs.",
+      "work_authorized": "Full authorization once adjustment of status/immigrant visa is granted.",
+      "dual_intent": true,
+      "key_forms": [
+        "I-526 or I-526E (regional center)",
+        "I-485 or consular DS-260",
+        "later I-829 to remove conditions"
+      ],
+      "recurring_deadlines": [
+        "Visa Bulletin priority-date monitoring (reserved set-asides for rural/high-unemployment/infrastructure move faster than unreserved)",
+        "I-829 filing window: 90 days before the 2-year conditional green card expires"
+      ],
+      "source_hint": "https://www.uscis.gov/eb-5",
+      "work_option": {
+        "option_category": "investor",
+        "summary": "A green card through investment — no employer and no job offer, but a large amount of capital genuinely at risk and required job creation.",
+        "who_it_fits": "People with substantial capital who want permanent residence without an employer or an extraordinary-ability record.",
+        "eligibility_signals": [
+          "Investment of at least the statutory minimum, which differs for targeted employment area, rural and infrastructure projects — verify the current figures",
+          "Lawful source of funds, documented in detail",
+          "The required number of US jobs created or preserved"
+        ],
+        "typical_timeline": "Long. Petition adjudication plus, for some countries, a priority date queue, then a two-year conditional green card before conditions are removed.",
+        "cost_ballpark": "The investment itself dominates and is set by statute; add administration fees for regional centre projects and significant legal costs. Verify current thresholds — they have changed. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": false,
+        "allows_self_petition": true,
+        "country_restricted": [],
+        "risk_notes": [
+          "The capital is genuinely at risk — this is an investment that can be lost",
+          "Source-of-funds documentation is the most common failure point",
+          "The programme's rules and set-asides have changed repeatedly; check what is current"
+        ],
+        "next_steps": [
+          "Confirm the current minimum investment amounts on the USCIS page",
+          "Get independent advice on the project, separately from immigration advice"
+        ],
+        "base_fit": 0.75,
+        "match": {
+          "requires": [
+            "large_investment_capital"
+          ],
+          "boosts": []
+        },
+        "goals": [
+          "work_in_us",
+          "green_card"
+        ]
+      }
+    },
+    {
+      "id": "family_gc.immediate_relative",
+      "category": "family_gc",
+      "name": "Immediate Relative of a US Citizen",
+      "description": "Spouse, unmarried child under 21, or parent (if the USC petitioner is 21+) of a US citizen. Not subject to the annual numerical cap — no priority-date wait once the petition is approved.",
+      "work_authorized": "Full authorization once adjustment of status/immigrant visa is granted; EAD available while I-485 is pending.",
+      "dual_intent": true,
+      "key_forms": [
+        "I-130",
+        "I-485 or consular DS-260"
+      ],
+      "recurring_deadlines": [
+        "No numerical backlog; processing-time-driven only"
+      ],
+      "source_hint": "https://www.uscis.gov/family"
+    },
+    {
+      "id": "family_gc.f1",
+      "category": "family_gc",
+      "name": "F1 — Unmarried Adult Children of US Citizens",
+      "description": "Unmarried sons/daughters, 21 or older, of a US citizen. Numerically capped preference category.",
+      "work_authorized": "Full authorization once adjustment of status/immigrant visa is granted.",
+      "dual_intent": true,
+      "key_forms": [
+        "I-130",
+        "I-485 or consular DS-260"
+      ],
+      "recurring_deadlines": [
+        "Visa Bulletin priority-date monitoring"
+      ],
+      "source_hint": "https://www.uscis.gov/family"
+    },
+    {
+      "id": "family_gc.f2a",
+      "category": "family_gc",
+      "name": "F2A — Spouses & Minor Children of LPRs",
+      "description": "Spouses and unmarried children under 21 of a lawful permanent resident. Automatically upgrades to Immediate Relative if the petitioning LPR naturalizes.",
+      "work_authorized": "Full authorization once adjustment of status/immigrant visa is granted.",
+      "dual_intent": true,
+      "key_forms": [
+        "I-130",
+        "I-485 or consular DS-260"
+      ],
+      "recurring_deadlines": [
+        "Visa Bulletin priority-date monitoring (typically the shortest F-category wait)"
+      ],
+      "source_hint": "https://www.uscis.gov/family"
+    },
+    {
+      "id": "family_gc.f2b",
+      "category": "family_gc",
+      "name": "F2B — Unmarried Adult Children of LPRs",
+      "description": "Unmarried sons/daughters, 21 or older, of a lawful permanent resident. Converts to F1 (not Immediate Relative) if the petitioning LPR naturalizes.",
+      "work_authorized": "Full authorization once adjustment of status/immigrant visa is granted.",
+      "dual_intent": true,
+      "key_forms": [
+        "I-130",
+        "I-485 or consular DS-260"
+      ],
+      "recurring_deadlines": [
+        "Visa Bulletin priority-date monitoring"
+      ],
+      "source_hint": "https://www.uscis.gov/family"
+    },
+    {
+      "id": "family_gc.f3",
+      "category": "family_gc",
+      "name": "F3 — Married Children of US Citizens",
+      "description": "Married sons/daughters of a US citizen, plus their spouse and minor children. One of the most heavily backlogged categories.",
+      "work_authorized": "Full authorization once adjustment of status/immigrant visa is granted.",
+      "dual_intent": true,
+      "key_forms": [
+        "I-130",
+        "I-485 or consular DS-260"
+      ],
+      "recurring_deadlines": [
+        "Visa Bulletin priority-date monitoring — historically a decade-plus wait for most countries"
+      ],
+      "source_hint": "https://www.uscis.gov/family"
+    },
+    {
+      "id": "family_gc.f4",
+      "category": "family_gc",
+      "name": "F4 — Siblings of US Citizens",
+      "description": "Brothers/sisters of a US citizen petitioner who is 21 or older. Longest average wait of the family preference categories; LPRs cannot petition for siblings.",
+      "work_authorized": "Full authorization once adjustment of status/immigrant visa is granted.",
+      "dual_intent": true,
+      "key_forms": [
+        "I-130",
+        "I-485 or consular DS-260"
+      ],
+      "recurring_deadlines": [
+        "Visa Bulletin priority-date monitoring — historically the longest family-category wait"
+      ],
+      "source_hint": "https://www.uscis.gov/family"
+    },
+    {
+      "id": "family_gc.marriage_aos",
+      "category": "family_gc",
+      "name": "Marriage-Based Adjustment of Status",
+      "description": "Filing path triggered when a person already in the US marries a US citizen (Immediate Relative) or LPR (F2A); can often run concurrently with I-130 and, for USC spouses, filed together with I-485.",
+      "work_authorized": "EAD available while I-485 is pending (Immediate Relative track).",
+      "dual_intent": true,
+      "key_forms": [
+        "I-130",
+        "I-485",
+        "I-864 Affidavit of Support"
+      ],
+      "recurring_deadlines": [
+        "Bona fide marriage scrutiny; conditional 2-year green card if married under 2 years at approval, requiring I-751 to remove conditions"
+      ],
+      "source_hint": "https://www.uscis.gov/family/family-of-us-citizens"
+    },
+    {
+      "id": "diversity.dv",
+      "category": "diversity",
+      "name": "Diversity Visa (DV) Lottery",
+      "description": "Annual lottery (~55,000 visas) for nationals of countries with historically low rates of immigration to the US; requires a high-school-equivalent education or qualifying work experience.",
+      "work_authorized": "Full authorization once adjustment of status/immigrant visa is granted.",
+      "dual_intent": true,
+      "key_forms": [
+        "DS-5501/DV entry",
+        "DS-260 or I-485"
+      ],
+      "recurring_deadlines": [
+        "Annual entry period (commonly October), selectees must complete visa processing within the fiscal year"
+      ],
+      "source_hint": "https://travel.state.gov (Diversity Visa Program)"
+    },
+    {
+      "id": "humanitarian.asylum",
+      "category": "humanitarian",
+      "name": "Asylum",
+      "description": "Protection for individuals already in the US (or at a port of entry) who fear persecution in their home country on a protected ground; may be affirmative (USCIS) or defensive (immigration court).",
+      "work_authorized": "May apply for an EAD 150 days after filing a complete asylum application; certain nationalities/administrative pauses can affect processing.",
+      "dual_intent": "n/a (protection-based, not a dual-intent question)",
+      "key_forms": [
+        "I-589"
+      ],
+      "recurring_deadlines": [
+        "Must generally file within 1 year of last arrival, absent changed/extraordinary circumstances",
+        "EAD eligibility clock: 150 days after filing"
+      ],
+      "source_hint": "https://www.uscis.gov/humanitarian/refugees-and-asylum/asylum",
+      "work_option": {
+        "option_category": "humanitarian",
+        "summary": "Not a work route as such — but a pending asylum application can, after a waiting period, support an employment authorization document.",
+        "who_it_fits": "Only people who genuinely fear persecution in their home country on a protected ground and are already in the US or at a port of entry.",
+        "eligibility_signals": [
+          "A well-founded fear of persecution on a protected ground",
+          "Generally filed within one year of last arrival, absent changed or extraordinary circumstances",
+          "Work authorization is applied for separately, after a statutory waiting period that has changed over time"
+        ],
+        "typical_timeline": "The EAD clock is commonly cited as 150 days after a complete filing before the application can be made; the asylum case itself can take years.",
+        "cost_ballpark": "The asylum application itself has historically had no fee; the EAD application and any later filings may. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": false,
+        "allows_self_petition": true,
+        "country_restricted": [],
+        "risk_notes": [
+          "This is a protection route, not an immigration strategy — filing without a genuine claim carries serious consequences including permanent bars",
+          "Rules, waiting periods and eligibility have changed repeatedly and are subject to litigation"
+        ],
+        "next_steps": [
+          "If you believe you have a protection claim, speak to an accredited representative or immigration attorney before filing anything"
+        ],
+        "base_fit": 0.55,
+        "match": {
+          "requires": [
+            "asylum_claim"
+          ],
+          "boosts": []
+        },
+        "goals": [
+          "work_in_us"
+        ]
+      }
+    },
+    {
+      "id": "humanitarian.refugee",
+      "category": "humanitarian",
+      "name": "Refugee Status",
+      "description": "Protection processed from outside the US for individuals who fear persecution; admitted with refugee status and eligible to apply for a green card after 1 year.",
+      "work_authorized": "Authorized incident to status upon admission.",
+      "dual_intent": "n/a",
+      "key_forms": [
+        "I-590 (processed abroad)",
+        "I-485 after 1 year"
+      ],
+      "recurring_deadlines": [
+        "Must apply for LPR status after 1 year of physical presence (generally required, not merely optional)"
+      ],
+      "source_hint": "https://www.uscis.gov/humanitarian/refugees-and-asylum/refugees"
+    },
+    {
+      "id": "humanitarian.u_visa",
+      "category": "humanitarian",
+      "name": "U Nonimmigrant Status (Crime Victim)",
+      "description": "For victims of qualifying crimes who suffered substantial harm and have been/are/will likely be helpful to law enforcement. Numerically capped (10,000/year); heavy backlog produces a waitlist with interim relief.",
+      "work_authorized": "Yes, once granted; waitlisted applicants may receive deferred action and an EAD.",
+      "dual_intent": "leads to green card eligibility after 3 years",
+      "key_forms": [
+        "I-918",
+        "I-918 Supplement B (law enforcement certification)"
+      ],
+      "recurring_deadlines": [
+        "Annual cap of 10,000 principal grants — multi-year wait common"
+      ],
+      "source_hint": "https://www.uscis.gov/u-visa"
+    },
+    {
+      "id": "humanitarian.t_visa",
+      "category": "humanitarian",
+      "name": "T Nonimmigrant Status (Trafficking Victim)",
+      "description": "For victims of severe forms of human trafficking who comply with reasonable law enforcement requests (with exceptions) and would suffer extreme hardship if removed.",
+      "work_authorized": "Yes, once granted.",
+      "dual_intent": "leads to green card eligibility after 3 years",
+      "key_forms": [
+        "I-914"
+      ],
+      "recurring_deadlines": [
+        "Annual cap of 5,000 principal grants"
+      ],
+      "source_hint": "https://www.uscis.gov/t-visa"
+    },
+    {
+      "id": "humanitarian.vawa",
+      "category": "humanitarian",
+      "name": "VAWA Self-Petition",
+      "description": "Self-petition for a spouse, child, or parent who suffered battery or extreme cruelty by a US citizen or LPR abuser; available regardless of the survivor's gender, and does not require the abuser's knowledge or cooperation.",
+      "work_authorized": "May request an EAD once the petition is approved and deferred action is granted.",
+      "dual_intent": true,
+      "key_forms": [
+        "I-360"
+      ],
+      "recurring_deadlines": [
+        "No fixed filing deadline, but the qualifying relationship must generally still exist or have ended within the applicable look-back period"
+      ],
+      "source_hint": "https://www.uscis.gov/vawa"
+    },
+    {
+      "id": "humanitarian.tps",
+      "category": "humanitarian",
+      "name": "Temporary Protected Status (TPS)",
+      "description": "Temporary status for nationals of a country designated by DHS due to armed conflict, environmental disaster, or extraordinary conditions. Does not itself lead to a green card.",
+      "work_authorized": "Yes, EAD available while TPS is valid.",
+      "dual_intent": false,
+      "key_forms": [
+        "I-821",
+        "I-765"
+      ],
+      "recurring_deadlines": [
+        "Re-registration during each redesignation/extension window; country designation itself can be terminated"
+      ],
+      "source_hint": "https://www.uscis.gov/tps"
+    },
+    {
+      "id": "humanitarian.parole",
+      "category": "humanitarian",
+      "name": "Humanitarian Parole",
+      "description": "Case-by-case, discretionary temporary entry/stay for urgent humanitarian reasons or significant public benefit. Not a visa and not itself a path to permanent status.",
+      "work_authorized": "May apply for an EAD in many cases.",
+      "dual_intent": false,
+      "key_forms": [
+        "I-131"
+      ],
+      "recurring_deadlines": [
+        "Fixed parole period set case-by-case, typically up to 1–2 years, non-renewing by default"
+      ],
+      "source_hint": "https://www.uscis.gov/humanitarian/humanitarian-parole"
+    },
+    {
+      "id": "special_immigrant.sij",
+      "category": "special_immigrant",
+      "name": "Special Immigrant Juvenile (SIJ) Status",
+      "description": "For children who cannot reunify with one or both parents due to abuse, abandonment, or neglect, and for whom a state court has made specific findings.",
+      "work_authorized": "Full authorization once adjustment of status is granted.",
+      "dual_intent": true,
+      "key_forms": [
+        "State juvenile court order",
+        "I-360",
+        "I-485"
+      ],
+      "recurring_deadlines": [
+        "State court predicate order generally required before turning 21 (varies by state)"
+      ],
+      "source_hint": "https://www.uscis.gov/sij"
+    },
+    {
+      "id": "post_lpr.conditional_gc",
+      "category": "post_lpr",
+      "name": "Conditional Permanent Resident (2-year)",
+      "description": "Issued when a marriage is under 2 years old at green card approval, or for EB-5 investors — conditions must be removed or the status expires.",
+      "work_authorized": "Full authorization.",
+      "dual_intent": "n/a",
+      "key_forms": [
+        "I-751 (marriage) or I-829 (EB-5)"
+      ],
+      "recurring_deadlines": [
+        "File within the 90-day window before the 2-year conditional card expires"
+      ],
+      "source_hint": "https://www.uscis.gov/i-751, https://www.uscis.gov/i-829"
+    },
+    {
+      "id": "post_lpr.lpr",
+      "category": "post_lpr",
+      "name": "Lawful Permanent Resident (Green Card)",
+      "description": "Unconditional lawful permanent residence, renewable green card (I-90 every 10 years), with continuous-residence obligations.",
+      "work_authorized": "Full authorization, any employer.",
+      "dual_intent": "n/a",
+      "key_forms": [
+        "I-90 (renewal)"
+      ],
+      "recurring_deadlines": [
+        "Renew I-90 before the 10-year card expires",
+        "Re-entry permit (I-131) needed for absences over ~1 year",
+        "Physical-presence requirement toward naturalization eligibility"
+      ],
+      "source_hint": "https://www.uscis.gov/green-card"
+    },
+    {
+      "id": "post_lpr.naturalization",
+      "category": "post_lpr",
+      "name": "Naturalization (US Citizenship)",
+      "description": "Eligible after 5 years as an LPR (3 years if still married to and living with the US citizen who sponsored the green card), meeting continuous residence, physical presence, good moral character, and civics/English testing requirements.",
+      "work_authorized": "n/a — full citizenship rights.",
+      "dual_intent": "n/a",
+      "key_forms": [
+        "N-400"
+      ],
+      "recurring_deadlines": [
+        "Eligible to file up to 90 days before reaching the 5-year (or 3-year) mark"
+      ],
+      "source_hint": "https://www.uscis.gov/n-400"
+    },
+    {
+      "id": "temp_worker.h1b_cap_exempt",
+      "category": "temp_worker",
+      "name": "H-1B — Cap-Exempt Employer",
+      "description": "The same specialty-occupation status, filed by an employer that is not subject to the annual numerical cap — typically institutions of higher education, related or affiliated nonprofit entities, and nonprofit or governmental research organizations. No lottery, and petitions can generally be filed at any time of year.",
+      "work_authorized": "Yes, employer- and role-specific.",
+      "dual_intent": true,
+      "requirements": [
+        "An employer that meets the cap-exempt definition, or a concurrent position with one",
+        "The role is a specialty occupation and the applicant holds the required degree or equivalent",
+        "Certified LCA before the I-129"
+      ],
+      "key_forms": [
+        "I-129",
+        "LCA (ETA-9035)"
+      ],
+      "recurring_deadlines": [
+        "No registration window — filing is year-round",
+        "Extensions tied to the approved validity period"
+      ],
+      "source_hint": "https://www.uscis.gov/h-1b-specialty-occupations",
+      "work_option": {
+        "option_category": "nonimmigrant work",
+        "summary": "The same H-1B, but through a university, affiliated nonprofit or nonprofit/government research employer — which generally means no lottery and year-round filing.",
+        "who_it_fits": "Researchers, clinicians, postdocs, university staff, and anyone who can take a role at a qualifying nonprofit or research institution.",
+        "eligibility_signals": [
+          "The employer is an institution of higher education, an affiliated or related nonprofit, or a nonprofit/governmental research organization",
+          "The role is a specialty occupation and you hold the required degree or equivalent",
+          "Some people hold a cap-exempt position and a concurrent cap-subject one — the rules for that are specific and worth advice"
+        ],
+        "typical_timeline": "No registration window to wait for, so the timeline is essentially the petition adjudication, which premium processing can shorten considerably.",
+        "cost_ballpark": "Employer-paid; nonprofit and educational petitioners are exempt from some of the surcharges that apply to other employers. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": true,
+        "allows_self_petition": false,
+        "country_restricted": [],
+        "risk_notes": [
+          "Whether an employer is truly cap-exempt turns on its relationship to a qualifying institution and is a common point of dispute",
+          "Cap-exempt status generally attaches to the job, so moving to a cap-subject employer later usually means going through the lottery"
+        ],
+        "next_steps": [
+          "Search university, hospital system, and nonprofit research job boards specifically",
+          "Ask any prospective employer's HR directly whether they file cap-exempt H-1Bs"
+        ],
+        "base_fit": 0.85,
+        "match": {
+          "requires": [
+            "cap_exempt_employer",
+            "bachelors_degree"
+          ],
+          "boosts": [
+            "advanced_degree",
+            "research_background"
+          ]
+        },
+        "goals": [
+          "work_in_us"
+        ],
+        "parallel_notes": "This is the single most commonly missed alternative for people who did not get selected in the H-1B lottery."
+      }
+    },
+    {
+      "id": "temp_worker.e3",
+      "category": "temp_worker",
+      "name": "E-3 Specialty Occupation (Australia)",
+      "description": "A specialty-occupation work visa available only to Australian nationals. Structurally similar to H-1B — degree-level specialty role, certified LCA — but with its own annual allocation that has historically not been exhausted, and consular processing available.",
+      "work_authorized": "Yes, employer- and role-specific; E-3 spouses are generally eligible for work authorization.",
+      "dual_intent": false,
+      "requirements": [
+        "Australian nationality",
+        "A US job offer in a specialty occupation and the matching degree or equivalent",
+        "Certified LCA"
+      ],
+      "key_forms": [
+        "LCA (ETA-9035)",
+        "DS-160 at a consulate, or I-129 for change of status/extension"
+      ],
+      "recurring_deadlines": [
+        "Granted in increments, commonly cited as up to two years, renewable"
+      ],
+      "source_hint": "https://travel.state.gov, https://www.uscis.gov",
+      "work_option": {
+        "option_category": "nonimmigrant work",
+        "summary": "Australia-only: an H-1B-like specialty occupation visa with its own quota that has historically not run out, and no lottery.",
+        "who_it_fits": "Australian citizens with a US job offer in a degree-level role.",
+        "eligibility_signals": [
+          "Australian nationality",
+          "A specialty-occupation job offer and the degree the role requires",
+          "The employer will obtain a certified LCA"
+        ],
+        "typical_timeline": "Often much faster than H-1B because it can be applied for at a consulate without a petition, subject to appointment availability.",
+        "cost_ballpark": "Comparatively low — visa application fee plus the employer's LCA and legal costs. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": true,
+        "allows_self_petition": false,
+        "country_restricted": [
+          "Australia"
+        ],
+        "risk_notes": [
+          "Nationality-restricted with no exceptions",
+          "Not a dual-intent category, so pairing it with a green card process needs care",
+          "Renewals are generally available but each is a fresh decision"
+        ],
+        "next_steps": [
+          "If you are Australian, raise E-3 with any US employer — many recruiters do not know it exists"
+        ],
+        "base_fit": 0.9,
+        "match": {
+          "requires": [
+            "australia",
+            "us_employer"
+          ],
+          "boosts": []
+        },
+        "goals": [
+          "work_in_us"
+        ]
+      }
+    },
+    {
+      "id": "temp_worker.h1b1",
+      "category": "temp_worker",
+      "name": "H-1B1 Specialty Occupation (Chile / Singapore)",
+      "description": "A free-trade-agreement variant of the specialty occupation visa reserved for Chilean and Singaporean nationals, with its own set-aside numbers that have historically not been exhausted.",
+      "work_authorized": "Yes, employer- and role-specific.",
+      "dual_intent": false,
+      "requirements": [
+        "Chilean or Singaporean nationality",
+        "A specialty-occupation job offer and the required degree",
+        "Certified LCA"
+      ],
+      "key_forms": [
+        "LCA (ETA-9035)",
+        "DS-160 at a consulate, or I-129 for change of status/extension"
+      ],
+      "recurring_deadlines": [
+        "Granted in short increments, commonly cited as one year, renewable"
+      ],
+      "source_hint": "https://www.uscis.gov/h-1b1",
+      "work_option": {
+        "option_category": "nonimmigrant work",
+        "summary": "Chile and Singapore only: a set-aside specialty occupation route that avoids the H-1B lottery.",
+        "who_it_fits": "Chilean and Singaporean citizens with a US job offer in a degree-level role.",
+        "eligibility_signals": [
+          "Chilean or Singaporean nationality",
+          "A specialty-occupation offer and the matching degree",
+          "Certified LCA from the employer"
+        ],
+        "typical_timeline": "Consular application without a petition is common, so often quicker than H-1B; renewals recur more frequently because increments are shorter.",
+        "cost_ballpark": "Comparatively low — visa fee plus employer LCA and legal costs. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": true,
+        "allows_self_petition": false,
+        "country_restricted": [
+          "Chile",
+          "Singapore"
+        ],
+        "risk_notes": [
+          "Nationality-restricted",
+          "Shorter validity increments mean more frequent renewals",
+          "Not a dual-intent category — an evident green card plan can complicate renewal"
+        ],
+        "next_steps": [
+          "If you hold Chilean or Singaporean nationality, raise H-1B1 explicitly with the employer's immigration counsel"
+        ],
+        "base_fit": 0.9,
+        "match": {
+          "requires": [
+            "chile_singapore",
+            "us_employer"
+          ],
+          "boosts": []
+        },
+        "goals": [
+          "work_in_us"
+        ]
+      }
+    },
+    {
+      "id": "extraordinary.o1a",
+      "category": "extraordinary",
+      "name": "O-1A Extraordinary Ability (Sciences, Education, Business, Athletics)",
+      "description": "For individuals with extraordinary ability in the sciences, education, business or athletics, demonstrated by a major internationally recognized award or by satisfying several of the regulatory evidentiary criteria. Petitioned by a US employer or by an agent — including, in some structures, an agent acting for a person with multiple engagements.",
+      "work_authorized": "Yes, for the petitioning employer or agent and the described engagements.",
+      "dual_intent": "de facto (no explicit intent requirement; commonly held alongside a green card process)",
+      "requirements": [
+        "Evidence of sustained national or international acclaim in the field",
+        "A US petitioner — an employer or an agent — since there is no pure self-petition",
+        "Advisory opinion or consultation from a peer group or labour organization where required"
+      ],
+      "key_forms": [
+        "I-129",
+        "advisory opinion / consultation letter"
+      ],
+      "recurring_deadlines": [
+        "Initial period commonly up to three years; extensions in shorter increments"
+      ],
+      "source_hint": "https://www.uscis.gov/o-1",
+      "work_option": {
+        "option_category": "nonimmigrant work",
+        "summary": "No lottery, no cap, no degree requirement — if your record shows sustained acclaim in your field. Often the answer for people who miss the H-1B lottery.",
+        "who_it_fits": "Researchers, engineers, founders, athletes and business figures with awards, publications, press, judging roles, high salary or comparable evidence.",
+        "eligibility_signals": [
+          "A major internationally recognized award, or evidence under several of the regulatory criteria (awards, memberships, published material about you, judging, original contributions, scholarly articles, critical role, high remuneration)",
+          "A US employer or agent willing to petition",
+          "USCIS has published guidance on how these criteria apply in STEM and entrepreneurial contexts"
+        ],
+        "typical_timeline": "No annual window to wait for — the timeline is assembling the evidence (often months) plus adjudication, which premium processing can shorten.",
+        "cost_ballpark": "Petition fee plus substantial attorney time on the evidence package; commonly more expensive to prepare than an H-1B. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": true,
+        "allows_self_petition": false,
+        "country_restricted": [],
+        "risk_notes": [
+          "An agent petitioner is not the same as self-petitioning — you still need a US petitioner",
+          "The standard is a high one and evidence is weighed qualitatively, not counted",
+          "Tied to the described engagements; new employers generally mean a new or amended petition"
+        ],
+        "next_steps": [
+          "Map your record against the regulatory criteria before assuming you do not qualify — many people underestimate this route",
+          "Start collecting citation counts, press, and letters early; they are the slow part"
+        ],
+        "base_fit": 0.85,
+        "match": {
+          "requires": [
+            "extraordinary_evidence"
+          ],
+          "boosts": [
+            "us_employer",
+            "advanced_degree",
+            "research_background"
+          ]
+        },
+        "goals": [
+          "work_in_us"
+        ],
+        "parallel_notes": "The evidence assembled for O-1A carries over substantially into an EB-1A or EB-2 NIW petition later."
+      }
+    },
+    {
+      "id": "extraordinary.o1b",
+      "category": "extraordinary",
+      "name": "O-1B Extraordinary Ability (Arts) / Achievement (Film & TV)",
+      "description": "For individuals with extraordinary ability in the arts, or a record of extraordinary achievement in the motion picture or television industry. The arts standard is generally described as distinction rather than the higher O-1A acclaim standard; the film/TV standard is its own test.",
+      "work_authorized": "Yes, for the petitioning employer or agent and the described engagements.",
+      "dual_intent": "de facto",
+      "requirements": [
+        "Evidence of distinction in the arts, or extraordinary achievement in film/TV",
+        "A US employer or agent petitioner",
+        "Consultation from the appropriate peer group, guild or labour organization"
+      ],
+      "key_forms": [
+        "I-129",
+        "peer group / union consultation"
+      ],
+      "recurring_deadlines": [
+        "Initial period commonly up to three years; extensions in shorter increments"
+      ],
+      "source_hint": "https://www.uscis.gov/o-1",
+      "work_option": {
+        "option_category": "nonimmigrant work",
+        "summary": "The arts and entertainment version of O-1 — designers, musicians, artists, chefs, film and TV professionals — again with no lottery and no degree requirement.",
+        "who_it_fits": "Creative professionals with reviews, awards, credits, commercial success or recognition from peers.",
+        "eligibility_signals": [
+          "Recognition in the field: leading roles, critical reviews, awards or nominations, commercial success, testimony from experts",
+          "A US employer or agent petitioner — agent petitions are common in the arts because the work is engagement-based",
+          "A union or peer-group consultation"
+        ],
+        "typical_timeline": "Evidence assembly plus adjudication; consultation letters can add weeks. Premium processing is available.",
+        "cost_ballpark": "Petition fee plus attorney time; agent-based structures add coordination cost. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": true,
+        "allows_self_petition": false,
+        "country_restricted": [],
+        "risk_notes": [
+          "The arts and the film/TV standards are different tests — which one applies matters",
+          "Itinerary and engagement documentation is a common weak point for freelancers"
+        ],
+        "next_steps": [
+          "Collect reviews, credits and award records now — reconstructing them later is the expensive part",
+          "Ask whether an agent petition fits your working pattern better than a single employer"
+        ],
+        "base_fit": 0.85,
+        "match": {
+          "requires": [
+            "extraordinary_evidence",
+            "arts_or_media"
+          ],
+          "boosts": [
+            "us_employer"
+          ]
+        },
+        "goals": [
+          "work_in_us"
+        ]
+      }
+    },
+    {
+      "id": "intracompany.l1a",
+      "category": "intracompany",
+      "name": "L-1A Intracompany Transferee — Executive or Manager",
+      "description": "Transfer of an executive or manager from a qualifying foreign entity to a related US entity (parent, branch, subsidiary or affiliate). Requires a qualifying period of employment abroad — commonly cited as one continuous year within the preceding three. A 'new office' variant exists for opening a US entity, typically approved for a shorter initial period with evidence required to extend.",
+      "work_authorized": "Yes, for the sponsoring related employer.",
+      "dual_intent": true,
+      "requirements": [
+        "A qualifying corporate relationship between the foreign and US entities",
+        "Employment abroad with the qualifying entity for the required period — commonly cited as one continuous year in the preceding three",
+        "The US role is genuinely executive or managerial"
+      ],
+      "key_forms": [
+        "I-129",
+        "I-129S for blanket petitions"
+      ],
+      "recurring_deadlines": [
+        "Maximum stay commonly cited as seven years",
+        "New-office petitions typically get a shorter initial period and must show growth to extend"
+      ],
+      "source_hint": "https://www.uscis.gov/l-1a",
+      "work_option": {
+        "option_category": "nonimmigrant work",
+        "summary": "Move to the US through your existing employer's US arm — no lottery, and it lines up naturally with the EB-1C green card.",
+        "who_it_fits": "Executives and managers already working for a multinational, and founders opening a US office for an existing foreign business.",
+        "eligibility_signals": [
+          "You have worked abroad for the qualifying related entity for the required period, commonly cited as one continuous year within the last three",
+          "There is a genuine parent/branch/subsidiary/affiliate relationship",
+          "The US role is executive or managerial in substance, not just in title",
+          "New-office option exists where the US entity is being established — expect a shorter initial approval and evidence requirements to extend"
+        ],
+        "typical_timeline": "Petition-driven; premium processing available. The real gate is usually the year abroad, which cannot be shortened.",
+        "cost_ballpark": "Employer-paid petition fees plus legal work documenting the corporate relationship; blanket L petitions reduce per-person cost for large employers. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": true,
+        "allows_self_petition": false,
+        "country_restricted": [],
+        "risk_notes": [
+          "The one-year-abroad requirement is the most common disqualifier and cannot be waived",
+          "'Manager' is scrutinised — managing a function or people, not simply being senior",
+          "New-office cases face heightened scrutiny at extension"
+        ],
+        "next_steps": [
+          "Check whether your employer has, or could establish, a qualifying US entity",
+          "If you are close to a year abroad with them, note the date — it is a hard gate"
+        ],
+        "base_fit": 0.8,
+        "match": {
+          "requires": [
+            "multinational_employer",
+            "year_abroad_with_employer"
+          ],
+          "boosts": [
+            "manager_role"
+          ]
+        },
+        "goals": [
+          "work_in_us"
+        ],
+        "parallel_notes": "L-1A time counts naturally toward an EB-1C multinational manager green card, which needs no PERM."
+      }
+    },
+    {
+      "id": "intracompany.l1b",
+      "category": "intracompany",
+      "name": "L-1B Intracompany Transferee — Specialized Knowledge",
+      "description": "Transfer of an employee with specialized knowledge of the organization's products, services, research, systems or procedures from a qualifying foreign entity to a related US entity. Same qualifying-employment-abroad requirement as L-1A.",
+      "work_authorized": "Yes, for the sponsoring related employer.",
+      "dual_intent": true,
+      "requirements": [
+        "A qualifying corporate relationship",
+        "The required period of employment abroad with the qualifying entity",
+        "Knowledge that is genuinely specialized or advanced relative to others in the field or the company"
+      ],
+      "key_forms": [
+        "I-129",
+        "I-129S for blanket petitions"
+      ],
+      "recurring_deadlines": [
+        "Maximum stay commonly cited as five years"
+      ],
+      "source_hint": "https://www.uscis.gov/l-1b",
+      "work_option": {
+        "option_category": "nonimmigrant work",
+        "summary": "The specialist version of the intracompany transfer — same no-lottery route, for people whose knowledge of the company's systems or products is the point.",
+        "who_it_fits": "Engineers, technical specialists and product experts inside a multinational with a US entity.",
+        "eligibility_signals": [
+          "The required period of qualifying employment abroad, commonly cited as one continuous year in the preceding three",
+          "Knowledge that is special or advanced, and documented as such",
+          "A qualifying US-foreign corporate relationship"
+        ],
+        "typical_timeline": "Petition-driven with premium processing available; the year abroad is the fixed gate.",
+        "cost_ballpark": "Employer-paid petition and legal fees. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": true,
+        "allows_self_petition": false,
+        "country_restricted": [],
+        "risk_notes": [
+          "'Specialized knowledge' is the most contested term in this category and denial rates have historically been higher than L-1A",
+          "Shorter maximum stay than L-1A, and it does not map onto EB-1C the way L-1A does",
+          "Placement at third-party worksites carries extra restrictions"
+        ],
+        "next_steps": [
+          "Ask whether your employer holds a blanket L petition",
+          "Document what makes your knowledge company-specific rather than industry-general"
+        ],
+        "base_fit": 0.75,
+        "match": {
+          "requires": [
+            "multinational_employer",
+            "year_abroad_with_employer"
+          ],
+          "boosts": []
+        },
+        "goals": [
+          "work_in_us"
+        ]
+      }
+    },
+    {
+      "id": "employment_gc.eb1a",
+      "category": "employment_gc",
+      "name": "EB-1A — Extraordinary Ability (Self-Petition)",
+      "description": "A green card for individuals of extraordinary ability in the sciences, arts, education, business or athletics, evidenced by a major internationally recognized award or by satisfying several regulatory criteria plus a final-merits assessment. No employer, no job offer and no PERM — the petition belongs to the person.",
+      "work_authorized": "Full authorization once adjustment of status or an immigrant visa is granted; the I-140 itself confers neither status nor work authorization.",
+      "dual_intent": true,
+      "requirements": [
+        "Sustained national or international acclaim, evidenced under the regulatory criteria",
+        "Intent to continue working in the field of expertise in the US",
+        "No job offer or labor certification required"
+      ],
+      "key_forms": [
+        "I-140 (self-petitioned)",
+        "I-485 or consular DS-260"
+      ],
+      "recurring_deadlines": [
+        "Visa Bulletin priority-date monitoring — historically current or near-current for many, though not all, countries of birth"
+      ],
+      "source_hint": "https://www.uscis.gov/eb-1",
+      "work_option": {
+        "option_category": "immigrant",
+        "summary": "A green card you file for yourself — no employer, no job offer, no PERM — if your record shows extraordinary ability.",
+        "who_it_fits": "People with a strong, documented record: awards, citations, press, judging, original contributions of major significance.",
+        "eligibility_signals": [
+          "A one-time major internationally recognized award, or evidence satisfying at least three of the regulatory criteria",
+          "A final-merits assessment that the record as a whole shows you are among the small percentage at the top of the field",
+          "You will keep working in that field in the US"
+        ],
+        "typical_timeline": "Evidence assembly commonly takes months; I-140 adjudication has premium processing available; then the priority date queue, which for many countries has historically been shorter for EB-1 than EB-2 or EB-3.",
+        "cost_ballpark": "Petition and adjustment fees plus significant attorney time on the evidence record. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": false,
+        "allows_self_petition": true,
+        "country_restricted": [],
+        "risk_notes": [
+          "A high evidentiary bar, and meeting three criteria on paper does not guarantee approval — the final-merits step is separate",
+          "This is the route most often overlooked by people who assume an employer must sponsor them",
+          "An approved I-140 is not status; you still need a nonimmigrant status or a pending adjustment to live and work in the US meanwhile"
+        ],
+        "next_steps": [
+          "Audit your record against the regulatory criteria",
+          "If you already hold or are building an O-1A record, much of the same evidence applies"
+        ],
+        "base_fit": 0.8,
+        "match": {
+          "requires": [
+            "extraordinary_evidence"
+          ],
+          "boosts": [
+            "advanced_degree",
+            "research_background"
+          ]
+        },
+        "goals": [
+          "work_in_us",
+          "green_card"
+        ]
+      }
+    },
+    {
+      "id": "employment_gc.eb1b",
+      "category": "employment_gc",
+      "name": "EB-1B — Outstanding Professor or Researcher",
+      "description": "A green card for internationally recognized outstanding professors and researchers with the required period of experience in the academic field — commonly cited as three years — sponsored by a university, institution of higher education, or a private employer with an established research department. No PERM required.",
+      "work_authorized": "Full authorization once adjustment of status or an immigrant visa is granted.",
+      "dual_intent": true,
+      "requirements": [
+        "International recognition as outstanding in a specific academic area",
+        "The required period of teaching or research experience in that area",
+        "A permanent job offer from a qualifying academic or research employer, who petitions"
+      ],
+      "key_forms": [
+        "I-140 (employer-petitioned)",
+        "I-485 or consular DS-260"
+      ],
+      "recurring_deadlines": [
+        "Visa Bulletin priority-date monitoring"
+      ],
+      "source_hint": "https://www.uscis.gov/eb-1",
+      "work_option": {
+        "option_category": "immigrant",
+        "summary": "The academic green card — employer-sponsored but PERM-free, for outstanding professors and researchers.",
+        "who_it_fits": "Faculty, postdocs moving into permanent research roles, and industry researchers at employers with an established research department.",
+        "eligibility_signals": [
+          "International recognition as outstanding, evidenced under the regulatory criteria (major awards, memberships, published material about your work, judging, original contributions, authorship)",
+          "The required teaching or research experience, commonly cited as three years",
+          "A qualifying employer offering a permanent research or tenure-track position"
+        ],
+        "typical_timeline": "No PERM, so materially faster than EB-2 PERM at the front end; then the priority date queue.",
+        "cost_ballpark": "Employer-paid petition plus adjustment fees and attorney time. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": true,
+        "allows_self_petition": false,
+        "country_restricted": [],
+        "risk_notes": [
+          "Requires a qualifying employer and a permanent offer — a fixed-term postdoc often will not qualify",
+          "'Private employer' petitions must show an established research department and documented achievements"
+        ],
+        "next_steps": [
+          "Ask your institution's international office whether they file EB-1B and at what career stage"
+        ],
+        "base_fit": 0.75,
+        "match": {
+          "requires": [
+            "research_background",
+            "us_employer"
+          ],
+          "boosts": [
+            "advanced_degree",
+            "extraordinary_evidence"
+          ]
+        },
+        "goals": [
+          "work_in_us",
+          "green_card"
+        ]
+      }
+    },
+    {
+      "id": "employment_gc.eb1c",
+      "category": "employment_gc",
+      "name": "EB-1C — Multinational Manager or Executive",
+      "description": "A green card for managers and executives transferred by a multinational employer, mirroring L-1A. Requires a qualifying period of employment abroad with a related entity — commonly cited as one year within the three years before transfer — and a permanent US executive or managerial role. No PERM required.",
+      "work_authorized": "Full authorization once adjustment of status or an immigrant visa is granted.",
+      "dual_intent": true,
+      "requirements": [
+        "The qualifying period of managerial or executive employment abroad with a related entity",
+        "A permanent US role that is genuinely managerial or executive",
+        "The US entity has generally been doing business for at least a year"
+      ],
+      "key_forms": [
+        "I-140 (employer-petitioned)",
+        "I-485 or consular DS-260"
+      ],
+      "recurring_deadlines": [
+        "Visa Bulletin priority-date monitoring"
+      ],
+      "source_hint": "https://www.uscis.gov/eb-1",
+      "work_option": {
+        "option_category": "immigrant",
+        "summary": "The green card that pairs with L-1A — employer-sponsored, but no PERM and no labour market test.",
+        "who_it_fits": "People already transferred as, or eligible to transfer as, a multinational manager or executive.",
+        "eligibility_signals": [
+          "Qualifying managerial or executive employment abroad with a related entity for the required period",
+          "A permanent US managerial or executive position with the related US employer",
+          "The US entity has generally been operating for at least a year"
+        ],
+        "typical_timeline": "No PERM, so the front end is much shorter than EB-2/EB-3; then the priority date queue.",
+        "cost_ballpark": "Employer-paid. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": true,
+        "allows_self_petition": false,
+        "country_restricted": [],
+        "risk_notes": [
+          "The managerial/executive definition is scrutinised closely, especially in small US entities",
+          "Depends entirely on the corporate structure existing and continuing"
+        ],
+        "next_steps": [
+          "If you are on L-1A, ask when the employer typically starts EB-1C — it is often earlier than people expect"
+        ],
+        "base_fit": 0.75,
+        "match": {
+          "requires": [
+            "multinational_employer",
+            "manager_role"
+          ],
+          "boosts": [
+            "year_abroad_with_employer"
+          ]
+        },
+        "goals": [
+          "work_in_us",
+          "green_card"
+        ]
+      }
+    },
+    {
+      "id": "dependent.h4_ead",
+      "category": "dependent",
+      "name": "H-4 Dependent Work Authorization (EAD)",
+      "description": "Employment authorization for certain H-4 spouses of H-1B holders — generally where the H-1B principal has an approved I-140 or has an extension granted under the AC21 provisions past the sixth year. Eligibility for this category has been the subject of rulemaking and litigation, so it must be verified as current.",
+      "work_authorized": "Yes, if the EAD is approved — open-market, not employer-specific.",
+      "dual_intent": "follows the principal",
+      "requirements": [
+        "H-4 status as the spouse of an H-1B principal",
+        "The principal meets the qualifying condition (commonly an approved I-140 or an AC21-based extension)",
+        "An approved I-765"
+      ],
+      "key_forms": [
+        "I-539 (H-4 status)",
+        "I-765"
+      ],
+      "recurring_deadlines": [
+        "EAD validity is tied to the H-4 status period and must be renewed with it"
+      ],
+      "source_hint": "https://www.uscis.gov/working-in-the-united-states/temporary-workers/employment-authorization-for-certain-h-4-dependent-spouses",
+      "work_option": {
+        "option_category": "dependent",
+        "summary": "If your spouse is on H-1B and has reached certain green card milestones, you may be able to work for any employer on an H-4 EAD.",
+        "who_it_fits": "Spouses of H-1B holders whose principal has an approved I-140 or a qualifying extension.",
+        "eligibility_signals": [
+          "You hold, or can obtain, H-4 status as an H-1B spouse",
+          "The principal's case has reached the qualifying milestone — most commonly an approved I-140",
+          "You file and are approved for an I-765"
+        ],
+        "typical_timeline": "I-765 processing, historically variable and sometimes long; renewals need to be filed well ahead.",
+        "cost_ballpark": "One USCIS filing fee, applicant-paid. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": false,
+        "allows_self_petition": false,
+        "country_restricted": [],
+        "risk_notes": [
+          "This category has been repeatedly challenged and amended — confirm the current rule before relying on it",
+          "Entirely derivative: it ends if the principal's status ends",
+          "Renewal gaps can force a pause in employment"
+        ],
+        "next_steps": [
+          "Confirm where the principal's I-140 stands",
+          "Check the current USCIS page, since this rule has changed before"
+        ],
+        "base_fit": 0.8,
+        "match": {
+          "requires": [
+            "spouse_principal_h1b"
+          ],
+          "boosts": []
+        },
+        "goals": [
+          "work_in_us"
+        ]
+      }
+    },
+    {
+      "id": "dependent.l2_ead",
+      "category": "dependent",
+      "name": "L-2 Spouse Work Authorization",
+      "description": "Work authorization for the spouse of an L-1 holder. Following policy changes, L-2 spouses have generally been treated as authorized to work incident to status, with documentation practices that have evolved — verify what evidence current employers and USCIS expect.",
+      "work_authorized": "Yes — generally incident to status for spouses, open-market.",
+      "dual_intent": "follows the principal",
+      "requirements": [
+        "L-2 spouse status derived from an L-1 principal"
+      ],
+      "key_forms": [
+        "I-539 where a change of status is needed; I-765 historically, though policy on the need for it has changed"
+      ],
+      "recurring_deadlines": [
+        "Tied to the principal's L-1 validity"
+      ],
+      "source_hint": "https://www.uscis.gov/working-in-the-united-states/temporary-workers/l-1a-intracompany-transferee-executive-or-manager",
+      "work_option": {
+        "option_category": "dependent",
+        "summary": "Spouses of L-1 transferees have generally been able to work for any employer — one of the more generous dependent categories.",
+        "who_it_fits": "Spouses of people transferring to the US on L-1A or L-1B.",
+        "eligibility_signals": [
+          "Married to an L-1 principal and admitted in L-2 spouse status",
+          "Documentation practice has changed; check what evidence of authorization is currently expected"
+        ],
+        "typical_timeline": "Where authorization is incident to status, there is no separate wait beyond the principal's petition.",
+        "cost_ballpark": "Low to none if no separate application is required; verify current practice. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": false,
+        "allows_self_petition": false,
+        "country_restricted": [],
+        "risk_notes": [
+          "Derivative — it ends with the principal's status",
+          "Documentation requirements have shifted in recent years; confirm what is current"
+        ],
+        "next_steps": [
+          "If your spouse is exploring L-1, factor this in — it materially changes the household picture"
+        ],
+        "base_fit": 0.85,
+        "match": {
+          "requires": [
+            "spouse_principal_l1"
+          ],
+          "boosts": []
+        },
+        "goals": [
+          "work_in_us"
+        ]
+      }
+    },
+    {
+      "id": "dependent.e_spouse_ead",
+      "category": "dependent",
+      "name": "E-1 / E-2 / E-3 Spouse Work Authorization",
+      "description": "Work authorization for spouses of E-1 treaty traders, E-2 treaty investors and E-3 specialty occupation workers. Policy has generally treated E-spouses as authorized to work incident to status, with documentation practice evolving — verify what is current.",
+      "work_authorized": "Yes — generally incident to status for spouses, open-market.",
+      "dual_intent": "follows the principal",
+      "requirements": [
+        "E-1, E-2 or E-3 spouse status derived from the principal"
+      ],
+      "key_forms": [
+        "I-539 where a change of status is needed; I-765 historically"
+      ],
+      "recurring_deadlines": [
+        "Tied to the principal's status validity"
+      ],
+      "source_hint": "https://www.uscis.gov/working-in-the-united-states/temporary-workers",
+      "work_option": {
+        "option_category": "dependent",
+        "summary": "Spouses of E-1, E-2 and E-3 holders have generally been able to work for any US employer.",
+        "who_it_fits": "Spouses of treaty traders, treaty investors and Australian E-3 workers.",
+        "eligibility_signals": [
+          "Married to an E-1, E-2 or E-3 principal and in the corresponding spouse status",
+          "Current documentation practice should be confirmed — it has changed"
+        ],
+        "typical_timeline": "Where authorization is incident to status, no separate wait beyond the principal's case.",
+        "cost_ballpark": "Low to none if no separate filing is needed; verify. Government filing fees and any employer-paid surcharges change; treat this as a rough order of magnitude only and verify current fees on the linked USCIS/DOS page.",
+        "needs_employer_sponsor": false,
+        "allows_self_petition": false,
+        "country_restricted": [],
+        "risk_notes": [
+          "Derivative status",
+          "Documentation practice has changed in recent years"
+        ],
+        "next_steps": [
+          "Check the principal's category and the current USCIS guidance on spousal work authorization"
+        ],
+        "base_fit": 0.85,
+        "match": {
+          "requires": [
+            "spouse_principal_e"
+          ],
+          "boosts": []
+        },
+        "goals": [
+          "work_in_us"
+        ]
+      }
+    }
+  ],
+  "edges": [
+    {
+      "from": "student.f1",
+      "to": "student.cpt",
+      "type": "authorization",
+      "trigger": "DSO approval, curriculum-integrated employment"
+    },
+    {
+      "from": "student.f1",
+      "to": "student.opt_precompletion",
+      "type": "authorization",
+      "trigger": "I-765 approval before program completion",
+      "optional": true
+    },
+    {
+      "from": "student.f1",
+      "to": "student.opt_postcompletion",
+      "type": "authorization",
+      "trigger": "I-765 filed around program completion",
+      "optional": true
+    },
+    {
+      "from": "student.cpt",
+      "to": "student.opt_postcompletion",
+      "type": "authorization",
+      "trigger": "program completed; CPT ends and post-completion OPT is applied for separately",
+      "note": "12+ months of full-time CPT eliminates OPT eligibility at that education level"
+    },
+    {
+      "from": "student.opt_precompletion",
+      "to": "student.opt_postcompletion",
+      "type": "authorization",
+      "trigger": "program completed; remaining OPT time is applied for after graduation",
+      "note": "Pre-completion OPT used is deducted from the 12-month post-completion allowance"
+    },
+    {
+      "from": "student.opt_postcompletion",
+      "to": "student.stem_opt",
+      "type": "extension",
+      "trigger": "qualifying STEM degree + E-Verify employer + I-983",
+      "optional": true,
+      "note": "Only reachable from post-completion OPT — STEM OPT extends it rather than replacing it"
+    },
+    {
+      "from": "student.opt_postcompletion",
+      "to": "student.cap_gap",
+      "type": "extension",
+      "trigger": "timely-filed cap-subject H-1B petition before OPT expires"
+    },
+    {
+      "from": "student.stem_opt",
+      "to": "student.cap_gap",
+      "type": "extension",
+      "trigger": "timely-filed cap-subject H-1B petition before STEM OPT expires"
+    },
+    {
+      "from": "student.f1",
+      "to": "student.cap_gap",
+      "type": "extension",
+      "trigger": "timely-filed cap-subject H-1B petition while in F-1 status without OPT",
+      "note": "Extends status only — there is no work authorization to carry forward"
+    },
+    {
+      "from": "student.cap_gap",
+      "to": "temp_worker.h1b",
+      "type": "change_of_status",
+      "trigger": "H-1B petition approved, status begins October 1"
+    },
+    {
+      "from": "student.opt_postcompletion",
+      "to": "temp_worker.h1b",
+      "type": "change_of_status",
+      "trigger": "H-1B selected + petition approved (no cap-gap needed if timing lines up)"
+    },
+    {
+      "from": "student.stem_opt",
+      "to": "temp_worker.h1b",
+      "type": "change_of_status",
+      "trigger": "H-1B selected + petition approved while STEM OPT is still valid through the start date"
+    },
+    {
+      "from": "student.f1",
+      "to": "temp_worker.h1b",
+      "type": "change_of_status",
+      "trigger": "employer files a cap-subject petition with change of status directly from F-1",
+      "optional": true,
+      "note": "OPT and STEM OPT are optional steps, not prerequisites — a student can go straight to H-1B"
+    },
+    {
+      "from": "student.f1",
+      "to": "extraordinary.o1",
+      "type": "change_of_status",
+      "trigger": "meets extraordinary-ability evidentiary threshold"
+    },
+    {
+      "from": "student.opt_postcompletion",
+      "to": "extraordinary.o1",
+      "type": "change_of_status",
+      "trigger": "employer or agent petitions; often used when the H-1B lottery is missed"
+    },
+    {
+      "from": "student.stem_opt",
+      "to": "extraordinary.o1",
+      "type": "change_of_status",
+      "trigger": "employer or agent petitions; often used when the H-1B lottery is missed"
+    },
+    {
+      "from": "temp_worker.h1b",
+      "to": "extraordinary.o1",
+      "type": "change_of_status",
+      "trigger": "meets the O-1 evidentiary threshold; commonly used to escape the 6-year H-1B maximum"
+    },
+    {
+      "from": "exchange.j1",
+      "to": "extraordinary.o1",
+      "type": "change_of_status",
+      "trigger": "no unwaived 212(e) home-residency requirement, or waiver obtained"
+    },
+    {
+      "from": "student.f1",
+      "to": "family_gc.marriage_aos",
+      "type": "life_event",
+      "trigger": "marries a US citizen or LPR while in the US"
+    },
+    {
+      "from": "student.opt_postcompletion",
+      "to": "family_gc.marriage_aos",
+      "type": "life_event",
+      "trigger": "marries a US citizen or LPR while in the US"
+    },
+    {
+      "from": "student.stem_opt",
+      "to": "family_gc.marriage_aos",
+      "type": "life_event",
+      "trigger": "marries a US citizen or LPR while in the US"
+    },
+    {
+      "from": "extraordinary.o1",
+      "to": "family_gc.marriage_aos",
+      "type": "life_event",
+      "trigger": "marries a US citizen or LPR while in the US"
+    },
+    {
+      "from": "intracompany.l1",
+      "to": "family_gc.marriage_aos",
+      "type": "life_event",
+      "trigger": "marries a US citizen or LPR while in the US"
+    },
+    {
+      "from": "exchange.j1",
+      "to": "family_gc.marriage_aos",
+      "type": "life_event",
+      "trigger": "marries a US citizen or LPR while in the US",
+      "note": "An unwaived 212(e) home-residency requirement blocks adjustment until satisfied or waived"
+    },
+    {
+      "from": "exchange.j1",
+      "to": "temp_worker.h1b",
+      "type": "change_of_status",
+      "trigger": "no unwaived 212(e) home-residency requirement, or waiver obtained"
+    },
+    {
+      "from": "exchange.j1",
+      "to": "student.f1",
+      "type": "change_of_status",
+      "trigger": "enrols at a SEVP-certified school; 212(e) must be satisfied or waived for some categories"
+    },
+    {
+      "from": "temp_worker.h1b",
+      "to": "employment_gc.eb1",
+      "type": "petition",
+      "trigger": "employer or self-petition I-140 filed, EB-1 criteria met"
+    },
+    {
+      "from": "temp_worker.h1b",
+      "to": "employment_gc.eb2",
+      "type": "petition",
+      "trigger": "employer runs PERM, then files the I-140"
+    },
+    {
+      "from": "temp_worker.h1b",
+      "to": "employment_gc.eb2_niw",
+      "type": "petition",
+      "trigger": "self-petitioned I-140 under the national interest waiver — no employer involvement needed"
+    },
+    {
+      "from": "temp_worker.h1b",
+      "to": "employment_gc.eb3",
+      "type": "petition",
+      "trigger": "PERM + I-140 filed"
+    },
+    {
+      "from": "temp_worker.h1b",
+      "to": "family_gc.marriage_aos",
+      "type": "life_event",
+      "trigger": "marries a US citizen or LPR while in the US"
+    },
+    {
+      "from": "temp_worker.h1b",
+      "to": "temp_worker.h1b",
+      "type": "employer_change",
+      "trigger": "H-1B portability — new employer files I-129 before prior status lapses"
+    },
+    {
+      "from": "temp_worker.h1b",
+      "to": "temp_worker.h1b",
+      "type": "extension",
+      "trigger": "AC21 extension past the 6-year maximum on a long-pending PERM/I-140 or an approved I-140 awaiting a current priority date"
+    },
+    {
+      "from": "student.f1",
+      "to": "employment_gc.eb2_niw",
+      "type": "petition",
+      "trigger": "self-petitioned I-140 — the NIW route needs no employer, so it does not depend on OPT or H-1B",
+      "optional": true
+    },
+    {
+      "from": "student.f1",
+      "to": "employment_gc.eb1",
+      "type": "petition",
+      "trigger": "EB-1A self-petition on extraordinary ability — status-independent",
+      "optional": true
+    },
+    {
+      "from": "student.opt_postcompletion",
+      "to": "employment_gc.eb2",
+      "type": "petition",
+      "trigger": "employer begins PERM during OPT, then files the I-140"
+    },
+    {
+      "from": "student.opt_postcompletion",
+      "to": "employment_gc.eb2_niw",
+      "type": "petition",
+      "trigger": "self-petitioned I-140 under the national interest waiver"
+    },
+    {
+      "from": "student.opt_postcompletion",
+      "to": "employment_gc.eb3",
+      "type": "petition",
+      "trigger": "employer begins PERM during OPT, then files the I-140"
+    },
+    {
+      "from": "student.stem_opt",
+      "to": "employment_gc.eb2",
+      "type": "petition",
+      "trigger": "employer runs PERM during the STEM extension — common, since the 24 months buy time for the queue"
+    },
+    {
+      "from": "student.stem_opt",
+      "to": "employment_gc.eb2_niw",
+      "type": "petition",
+      "trigger": "self-petitioned I-140 under the national interest waiver"
+    },
+    {
+      "from": "student.stem_opt",
+      "to": "employment_gc.eb3",
+      "type": "petition",
+      "trigger": "employer runs PERM during the STEM extension, then files the I-140"
+    },
+    {
+      "from": "intracompany.l1",
+      "to": "employment_gc.eb1",
+      "type": "petition",
+      "trigger": "L-1A multinational manager/executive, I-140 filed under EB-1C"
+    },
+    {
+      "from": "intracompany.l1",
+      "to": "employment_gc.eb2",
+      "type": "petition",
+      "trigger": "employer runs PERM, then files the I-140"
+    },
+    {
+      "from": "intracompany.l1",
+      "to": "employment_gc.eb2_niw",
+      "type": "petition",
+      "trigger": "self-petitioned I-140 under the national interest waiver"
+    },
+    {
+      "from": "extraordinary.o1",
+      "to": "employment_gc.eb1",
+      "type": "petition",
+      "trigger": "self- or employer-petitioned I-140 under EB-1A"
+    },
+    {
+      "from": "extraordinary.o1",
+      "to": "employment_gc.eb2_niw",
+      "type": "petition",
+      "trigger": "self-petitioned I-140 — much of the O-1 evidence record carries over to the NIW argument"
+    },
+    {
+      "from": "employment_gc.eb3",
+      "to": "employment_gc.eb2",
+      "type": "priority_date_transfer",
+      "trigger": "upgrade — a new I-140 in EB-2 retains the earlier priority date, if the role and credentials qualify"
+    },
+    {
+      "from": "employment_gc.eb2",
+      "to": "employment_gc.eb3",
+      "type": "priority_date_transfer",
+      "trigger": "downgrade — filing in EB-3 when its Visa Bulletin date is ahead of EB-2, retaining the priority date"
+    },
+    {
+      "from": "employment_gc.eb2",
+      "to": "employment_gc.eb1",
+      "type": "priority_date_transfer",
+      "trigger": "a later EB-1 petition retains the priority date of the earlier approved I-140"
+    },
+    {
+      "from": "employment_gc.eb2_niw",
+      "to": "employment_gc.eb1",
+      "type": "priority_date_transfer",
+      "trigger": "a later EB-1 petition retains the priority date of the earlier approved I-140"
+    },
+    {
+      "from": "employment_gc.eb2_niw",
+      "to": "post_lpr.lpr",
+      "type": "adjustment_or_consular",
+      "trigger": "I-140 approved, priority date current, I-485 or DS-260 approved"
+    },
+    {
+      "from": "temp_worker.r1",
+      "to": "employment_gc.eb4",
+      "type": "petition",
+      "trigger": "I-360 religious worker petition after qualifying R-1 tenure"
+    },
+    {
+      "from": "humanitarian.u_visa",
+      "to": "post_lpr.conditional_gc",
+      "type": "adjustment",
+      "trigger": "3 years in U status, continued eligibility, I-485 approved"
+    },
+    {
+      "from": "humanitarian.t_visa",
+      "to": "post_lpr.conditional_gc",
+      "type": "adjustment",
+      "trigger": "3 years in T status, continued eligibility, I-485 approved"
+    },
+    {
+      "from": "humanitarian.vawa",
+      "to": "post_lpr.lpr",
+      "type": "adjustment",
+      "trigger": "I-360 approved, I-485 filed and approved"
+    },
+    {
+      "from": "special_immigrant.sij",
+      "to": "post_lpr.lpr",
+      "type": "adjustment",
+      "trigger": "I-360 approved, visa number available, I-485 approved"
+    },
+    {
+      "from": "humanitarian.asylum",
+      "to": "post_lpr.lpr",
+      "type": "adjustment",
+      "trigger": "1 year after asylum grant, I-485 filed and approved"
+    },
+    {
+      "from": "humanitarian.refugee",
+      "to": "post_lpr.lpr",
+      "type": "adjustment",
+      "trigger": "1 year after admission, I-485 filed (generally required)"
+    },
+    {
+      "from": "humanitarian.parole",
+      "to": "humanitarian.asylum",
+      "type": "filing",
+      "trigger": "files I-589 within the required window after parole entry"
+    },
+    {
+      "from": "humanitarian.tps",
+      "to": "employment_gc.eb2",
+      "type": "petition",
+      "trigger": "TPS holder separately qualifies for an underlying employment-based category (TPS itself does not confer this)"
+    },
+    {
+      "from": "employment_gc.eb1",
+      "to": "post_lpr.lpr",
+      "type": "adjustment_or_consular",
+      "trigger": "I-140 approved, priority date current, I-485 or DS-260 approved"
+    },
+    {
+      "from": "employment_gc.eb2",
+      "to": "post_lpr.lpr",
+      "type": "adjustment_or_consular",
+      "trigger": "I-140 approved, priority date current, I-485 or DS-260 approved"
+    },
+    {
+      "from": "employment_gc.eb3",
+      "to": "post_lpr.lpr",
+      "type": "adjustment_or_consular",
+      "trigger": "I-140 approved, priority date current, I-485 or DS-260 approved"
+    },
+    {
+      "from": "employment_gc.eb4",
+      "to": "post_lpr.lpr",
+      "type": "adjustment_or_consular",
+      "trigger": "I-360 approved, priority date current, I-485 or DS-260 approved"
+    },
+    {
+      "from": "employment_gc.eb5",
+      "to": "post_lpr.conditional_gc",
+      "type": "adjustment_or_consular",
+      "trigger": "I-526/I-526E approved, priority date current, I-485 or DS-260 approved"
+    },
+    {
+      "from": "post_lpr.conditional_gc",
+      "to": "post_lpr.lpr",
+      "type": "condition_removal",
+      "trigger": "I-751 or I-829 approved"
+    },
+    {
+      "from": "family_gc.immediate_relative",
+      "to": "post_lpr.lpr",
+      "type": "adjustment_or_consular",
+      "trigger": "I-130 approved, I-485 or DS-260 approved (no wait)"
+    },
+    {
+      "from": "family_gc.f1",
+      "to": "post_lpr.lpr",
+      "type": "adjustment_or_consular",
+      "trigger": "priority date current, I-485 or DS-260 approved"
+    },
+    {
+      "from": "family_gc.f2a",
+      "to": "post_lpr.lpr",
+      "type": "adjustment_or_consular",
+      "trigger": "priority date current, I-485 or DS-260 approved"
+    },
+    {
+      "from": "family_gc.f2a",
+      "to": "family_gc.immediate_relative",
+      "type": "auto_upgrade",
+      "trigger": "petitioning LPR naturalizes"
+    },
+    {
+      "from": "family_gc.f2b",
+      "to": "post_lpr.lpr",
+      "type": "adjustment_or_consular",
+      "trigger": "priority date current, I-485 or DS-260 approved"
+    },
+    {
+      "from": "family_gc.f2b",
+      "to": "family_gc.f1",
+      "type": "auto_convert",
+      "trigger": "petitioning LPR naturalizes"
+    },
+    {
+      "from": "family_gc.f3",
+      "to": "post_lpr.lpr",
+      "type": "adjustment_or_consular",
+      "trigger": "priority date current, I-485 or DS-260 approved"
+    },
+    {
+      "from": "family_gc.f4",
+      "to": "post_lpr.lpr",
+      "type": "adjustment_or_consular",
+      "trigger": "priority date current, I-485 or DS-260 approved"
+    },
+    {
+      "from": "family_gc.marriage_aos",
+      "to": "post_lpr.conditional_gc",
+      "type": "adjustment",
+      "trigger": "married under 2 years at approval"
+    },
+    {
+      "from": "family_gc.marriage_aos",
+      "to": "post_lpr.lpr",
+      "type": "adjustment",
+      "trigger": "married 2+ years at approval"
+    },
+    {
+      "from": "family_temp.k1",
+      "to": "family_gc.marriage_aos",
+      "type": "filing",
+      "trigger": "marries the petitioning US citizen within 90 days"
+    },
+    {
+      "from": "diversity.dv",
+      "to": "post_lpr.lpr",
+      "type": "adjustment_or_consular",
+      "trigger": "selected, eligibility maintained, I-485 or DS-260 approved before fiscal year end"
+    },
+    {
+      "from": "post_lpr.lpr",
+      "to": "post_lpr.naturalization",
+      "type": "eligibility",
+      "trigger": "5 years as LPR (3 years if still married to/living with USC sponsor) + continuous residence + physical presence + good moral character"
+    },
+    {
+      "from": "student.f1",
+      "to": "temp_worker.h1b_cap_exempt",
+      "type": "change_of_status",
+      "trigger": "a cap-exempt employer files a petition — no registration window applies",
+      "optional": true
+    },
+    {
+      "from": "student.opt_postcompletion",
+      "to": "temp_worker.h1b_cap_exempt",
+      "type": "change_of_status",
+      "trigger": "a cap-exempt employer petitions; commonly used after a missed lottery"
+    },
+    {
+      "from": "student.stem_opt",
+      "to": "temp_worker.h1b_cap_exempt",
+      "type": "change_of_status",
+      "trigger": "a cap-exempt employer petitions; commonly used after a missed lottery"
+    },
+    {
+      "from": "exchange.j1",
+      "to": "temp_worker.h1b_cap_exempt",
+      "type": "change_of_status",
+      "trigger": "university or research employer petitions; 212(e) must be satisfied or waived where it applies"
+    },
+    {
+      "from": "temp_worker.h1b_cap_exempt",
+      "to": "temp_worker.h1b",
+      "type": "change_of_status",
+      "trigger": "moving to a cap-subject employer generally requires lottery selection",
+      "note": "Cap exemption generally attaches to the qualifying job, not to the person"
+    },
+    {
+      "from": "temp_worker.h1b_cap_exempt",
+      "to": "employment_gc.eb1b",
+      "type": "petition",
+      "trigger": "academic or research employer files the I-140"
+    },
+    {
+      "from": "temp_worker.h1b_cap_exempt",
+      "to": "employment_gc.eb2_niw",
+      "type": "petition",
+      "trigger": "self-petitioned I-140 under the national interest waiver"
+    },
+    {
+      "from": "student.opt_postcompletion",
+      "to": "temp_worker.e3",
+      "type": "change_of_status",
+      "trigger": "Australian national with a specialty occupation offer"
+    },
+    {
+      "from": "student.opt_postcompletion",
+      "to": "temp_worker.h1b1",
+      "type": "change_of_status",
+      "trigger": "Chilean or Singaporean national with a specialty occupation offer"
+    },
+    {
+      "from": "temp_worker.e3",
+      "to": "employment_gc.eb2",
+      "type": "petition",
+      "trigger": "employer runs PERM, then files the I-140",
+      "note": "E-3 is not a dual-intent category — sequencing with a green card process needs care"
+    },
+    {
+      "from": "temp_worker.e3",
+      "to": "employment_gc.eb2_niw",
+      "type": "petition",
+      "trigger": "self-petitioned I-140 under the national interest waiver"
+    },
+    {
+      "from": "student.f1",
+      "to": "extraordinary.o1a",
+      "type": "change_of_status",
+      "trigger": "meets the extraordinary-ability evidentiary threshold"
+    },
+    {
+      "from": "student.opt_postcompletion",
+      "to": "extraordinary.o1a",
+      "type": "change_of_status",
+      "trigger": "employer or agent petitions; commonly used when the H-1B lottery is missed"
+    },
+    {
+      "from": "student.stem_opt",
+      "to": "extraordinary.o1a",
+      "type": "change_of_status",
+      "trigger": "employer or agent petitions; commonly used when the H-1B lottery is missed"
+    },
+    {
+      "from": "student.opt_postcompletion",
+      "to": "extraordinary.o1b",
+      "type": "change_of_status",
+      "trigger": "arts or film/TV record, employer or agent petitions"
+    },
+    {
+      "from": "temp_worker.h1b",
+      "to": "extraordinary.o1a",
+      "type": "change_of_status",
+      "trigger": "commonly used to move past the H-1B maximum period of stay"
+    },
+    {
+      "from": "extraordinary.o1a",
+      "to": "employment_gc.eb1a",
+      "type": "petition",
+      "trigger": "self-petitioned I-140 — much of the O-1A record carries over"
+    },
+    {
+      "from": "extraordinary.o1a",
+      "to": "employment_gc.eb2_niw",
+      "type": "petition",
+      "trigger": "self-petitioned I-140 under the national interest waiver"
+    },
+    {
+      "from": "extraordinary.o1b",
+      "to": "employment_gc.eb1a",
+      "type": "petition",
+      "trigger": "self-petitioned I-140 on the same body of evidence"
+    },
+    {
+      "from": "intracompany.l1a",
+      "to": "employment_gc.eb1c",
+      "type": "petition",
+      "trigger": "employer files the I-140 for a multinational manager or executive — no PERM"
+    },
+    {
+      "from": "intracompany.l1a",
+      "to": "employment_gc.eb2_niw",
+      "type": "petition",
+      "trigger": "self-petitioned I-140 under the national interest waiver"
+    },
+    {
+      "from": "intracompany.l1b",
+      "to": "employment_gc.eb2",
+      "type": "petition",
+      "trigger": "employer runs PERM, then files the I-140"
+    },
+    {
+      "from": "intracompany.l1b",
+      "to": "intracompany.l1a",
+      "type": "promotion",
+      "trigger": "promoted into a genuinely managerial or executive role; a new petition is required"
+    },
+    {
+      "from": "intracompany.l1a",
+      "to": "dependent.l2_ead",
+      "type": "derivative",
+      "trigger": "spouse admitted in L-2 status"
+    },
+    {
+      "from": "intracompany.l1b",
+      "to": "dependent.l2_ead",
+      "type": "derivative",
+      "trigger": "spouse admitted in L-2 status"
+    },
+    {
+      "from": "temp_worker.h1b",
+      "to": "dependent.h4_ead",
+      "type": "derivative",
+      "trigger": "spouse in H-4 status and the principal meets the qualifying condition, commonly an approved I-140"
+    },
+    {
+      "from": "temp_worker.h1b_cap_exempt",
+      "to": "dependent.h4_ead",
+      "type": "derivative",
+      "trigger": "spouse in H-4 status and the principal meets the qualifying condition"
+    },
+    {
+      "from": "intracompany.e1",
+      "to": "dependent.e_spouse_ead",
+      "type": "derivative",
+      "trigger": "spouse admitted in E status"
+    },
+    {
+      "from": "intracompany.e2",
+      "to": "dependent.e_spouse_ead",
+      "type": "derivative",
+      "trigger": "spouse admitted in E status"
+    },
+    {
+      "from": "temp_worker.e3",
+      "to": "dependent.e_spouse_ead",
+      "type": "derivative",
+      "trigger": "spouse admitted in E-3 dependent status"
+    },
+    {
+      "from": "employment_gc.eb1a",
+      "to": "post_lpr.lpr",
+      "type": "adjustment_or_consular",
+      "trigger": "I-140 approved, priority date current, I-485 or DS-260 approved"
+    },
+    {
+      "from": "employment_gc.eb1b",
+      "to": "post_lpr.lpr",
+      "type": "adjustment_or_consular",
+      "trigger": "I-140 approved, priority date current, I-485 or DS-260 approved"
+    },
+    {
+      "from": "employment_gc.eb1c",
+      "to": "post_lpr.lpr",
+      "type": "adjustment_or_consular",
+      "trigger": "I-140 approved, priority date current, I-485 or DS-260 approved"
+    },
+    {
+      "from": "employment_gc.eb2",
+      "to": "employment_gc.eb1a",
+      "type": "priority_date_transfer",
+      "trigger": "a later EB-1A petition retains the priority date of the earlier approved I-140"
+    },
+    {
+      "from": "employment_gc.eb2_niw",
+      "to": "employment_gc.eb1a",
+      "type": "priority_date_transfer",
+      "trigger": "a later EB-1A petition retains the priority date of the earlier approved I-140"
+    }
+  ]
+}

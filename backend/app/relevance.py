@@ -84,7 +84,7 @@ from .pathways import load_graph
 # status-vocabulary table ("stem opt" → student.stem_opt), and a second copy
 # here would drift the moment somebody adds a status to one and not the other.
 
-log = logging.getLogger("pathfinder.relevance")
+log = logging.getLogger("lumos.relevance")
 
 AFFECTS_YOU = "affects_you"
 WORTH_KNOWING = "worth_knowing"
