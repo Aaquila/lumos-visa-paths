@@ -49,6 +49,17 @@ class _NewsPageState extends State<NewsPage> {
   /// page is currently loaded — it doesn't change what the server fetches.
   bool _affectsYouOnly = false;
 
+  /// The ID token seen at last check. A restored session (any reload, any
+  /// new tab within the 14-day "stay signed in" window) comes back from
+  /// storage `isSignedIn` but with no token — Google's ID token is
+  /// deliberately never persisted — so the very first personalized fetch
+  /// almost always 401s and silently falls back to the public feed before
+  /// [AuthService]'s background silent re-auth has had time to land. Tracking
+  /// this lets [_onAuthChanged] tell "still no token" apart from "a token
+  /// just arrived" and re-fetch only on the latter, instead of re-fetching on
+  /// every unrelated [AuthService] notification (onboarding edits, etc).
+  String? _lastAuthToken;
+
   static const _fallbackDisclaimer =
       'Informational only, not legal advice. Every card links to the original '
       'document — read it before acting.';
@@ -60,24 +71,41 @@ class _NewsPageState extends State<NewsPage> {
     _scrollController.addListener(_onScroll);
     _isAuthenticated = AuthService.instance.session != null &&
         !AuthService.instance.session!.isDemo;
+    _lastAuthToken = AuthService.instance.session?.idToken;
+    AuthService.instance.addListener(_onAuthChanged);
     _loadInitial();
   }
 
   @override
   void dispose() {
+    AuthService.instance.removeListener(_onAuthChanged);
     _scrollController.dispose();
     super.dispose();
   }
 
+  /// Re-fetches once a real ID token shows up after a token-less restore —
+  /// see [_lastAuthToken]. Without this, a page loaded from a restored
+  /// session stays on the public fallback feed for the rest of the visit
+  /// even after the background silent re-auth succeeds.
+  void _onAuthChanged() {
+    final token = AuthService.instance.session?.idToken;
+    if (token != null && token.isNotEmpty && token != _lastAuthToken) {
+      _lastAuthToken = token;
+      _loadInitial(forceRefresh: true);
+    } else {
+      _lastAuthToken = token;
+    }
+  }
+
   /// Loads the initial page of articles.
-  Future<void> _loadInitial() async {
+  Future<void> _loadInitial({bool forceRefresh = false}) async {
     setState(() {
       _isInitialLoading = true;
       _loadError = null;
     });
 
     try {
-      final result = await _fetchPage(0);
+      final result = await _fetchPage(0, forceRefresh: forceRefresh);
 
       if (mounted) {
         setState(() {
@@ -102,7 +130,10 @@ class _NewsPageState extends State<NewsPage> {
   }
 
   /// Fetches a page of articles from the API.
-  Future<PersonalisedNewsFeed> _fetchPage(int offset) async {
+  Future<PersonalisedNewsFeed> _fetchPage(
+    int offset, {
+    bool forceRefresh = false,
+  }) async {
     // Return public feed if not authenticated
     if (!_isAuthenticated) {
       return _publicFeed();
@@ -111,6 +142,7 @@ class _NewsPageState extends State<NewsPage> {
     final result = await NewsService.instance.getNews(
       limit: _pageSize,
       offset: offset,
+      forceRefresh: forceRefresh,
     );
 
     // The personalized feed failed (expired session, backend hiccup, etc).
