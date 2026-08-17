@@ -5,3 +5,9 @@
 
 frontend/docs/*
 /backend/docs
+
+# Session/dev-process reports, not needed for deploy
+/IMPLEMENTATION_SUMMARY.md
+/MANUAL_INTEGRATION_TEST_PLAN.md
+/TEST_SUMMARY.md
+/UI_REVIEW_CHECKLIST.md
