@@ -1,7 +1,8 @@
 # Lumos — Flutter frontend
 
-The web frontend for Lumos (see `docs/PROJECT_PRD.md`). Flutter, web target
-first, Windows desktop configured for local dev builds.
+The web frontend for Lumos — an immigration assistant for neurodivergent and
+struggling brains (see `docs/PROJECT_PRD.md`). Flutter, web target first,
+Windows desktop configured for local dev builds.
 
 ## Run it
 
@@ -40,6 +41,27 @@ origin** on the OAuth client, and `flutter run` otherwise picks a random one.
 | `/news` | Scraped policy updates, `?node=<id>` to filter | public |
 | `/intake` | Place yourself on the map: describe it, or answer questions (`?mode=questions`) | guarded, redirects to `/signin` |
 | `/dashboard` | Personal page — status, goal, deadlines, route strip | guarded, redirects to `/signin` |
+
+## Landing page
+
+`lib/screens/landing/landing_page.dart` is a single scrolling page, built from
+composable sections so each one can be worked on in isolation:
+
+- **Hero** — the animated traveller-and-luggage pathway journey
+  (`lib/widgets/hero_journey.dart`) plus the primary "Get started" CTA
+- **Why this exists** — the case for a slower, kinder immigration tool
+- **What it does** — a capability grid mirroring the four pillars in the root
+  README: understands your situation, keeps you ahead of deadlines, tracks and
+  translates news, maps the paths ahead
+- **Privacy** — the same store/do-not-store list as the root
+  [README's Privacy section](../README.md#privacy), shown before sign-in ever
+  comes up
+- **Closing CTA** — one sketched-tail call to action (`lib/widgets/wavy_cta.dart`)
+
+The site nav (`lib/widgets/site_nav.dart`) reads sign-in state on every route:
+signed out, it shows sign-in and get-started actions; signed in, it adds a
+"My pathway" link straight to `/dashboard` and, on wide layouts, an account
+chip next to it instead of a duplicate button.
 
 ## Intake
 

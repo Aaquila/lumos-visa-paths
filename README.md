@@ -1,22 +1,25 @@
-# Lumos: Your immigration assistant
+# Lumos — Your immigration assistant for neurodivergent/struggling brains
 
 Tell it where you stand in your own words, and it holds the rest — your
 deadlines, the policy news that actually affects you, and the visa paths still
 open to you.
 
-Built for Open Atlas — AI for Social Good 2026 (Immigration track).
-
 ## What Lumos does
 
 - **Understands your visa situation** — plain language in, no forms, no legal
   vocabulary. It shows you the status it resolved before anything is saved.
-- **Keeps you ahead of deadlines** — every date your status implies, in order,
-  each with the plain reason it exists and the official page it came from.
-- **Tracks the news and translates it** — official policy updates, filtered down
-  to the one question that matters: does this change anything for *you*?
-- **Maps the paths ahead** — where each visa can lead, what switching types
-  actually involves, and what to start building now, including the evidence an
-  O-1 or EB-1 profile takes years to accumulate.
+- **Helps you stay on top of deadlines** — every date your status implies, in
+  order, each with the plain reason it exists and the official page it came
+  from.
+- **Tracks the latest news updates**, and sends you only the relevant ones —
+  official policy updates, filtered down to the one question that matters:
+  does this change anything for *you*? — and explains them in a way you can
+  understand.
+- **Helps you explore and understand different visa pathways** and helps you
+  prepare ahead of time, including steps to take for changing to other visa
+  types and profile building for O-1/EB-1 visas.
+- **Data privacy is guaranteed** — see [Privacy](#privacy) below for exactly
+  what is and is not stored.
 
 ## Why it exists
 
@@ -59,6 +62,7 @@ small thing to do next.
 | Path | What's there |
 |---|---|
 | [docs/PROJECT_PRD.md](docs/PROJECT_PRD.md) | Product requirements, scope, rollout order, data model |
+| [docs/SUBMISSION.md](docs/SUBMISSION.md) | Elevator pitch, project story, demo script |
 | [docs/generic_pathways.json](docs/generic_pathways.json) | The pathway graph: 40 statuses, 55 transitions, 12 families |
 | [frontend/](frontend/) | Flutter web app — **built**, see [frontend/README.md](frontend/README.md) |
 | [frontend/docs/](frontend/docs/) | UI PRD, the Flowmapp design system, HTML mockup |
@@ -71,7 +75,11 @@ Running it locally, including credentials setup: see [docs/RUNNING.md](docs/RUNN
 
 **Frontend** (`cd frontend && flutter run -d chrome`) — runs standalone:
 
-- Landing page with the animated pathway journey
+- Landing page with the animated pathway journey — hero, "why this exists",
+  what-it-does capability grid, privacy panel and closing call to action
+- Site nav adapts to sign-in state: signed out gets sign-in/get-started
+  actions, signed in gets a "My pathway" link straight to the dashboard plus
+  an account chip on wide layouts
 - Real Google sign-in (says so plainly when no OAuth client id is configured)
 - The full interactive pathway map: 43 statuses, 79 transitions, pan + zoom
 - `/intake` — describe your situation in your own words, or answer a short
