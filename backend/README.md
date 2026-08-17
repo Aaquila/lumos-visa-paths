@@ -127,10 +127,16 @@ Behaviour worth knowing:
 
 ## Scheduling
 
-The daily run is an in-process loop (`_daily_loop` in `app/main.py`), so a single
-Render web service is enough for the demo. For production, disable it with
-`SCRAPE_ON_STARTUP=0` and point a Render Cron Job at `POST /api/news/refresh` —
-identical work, but it survives the web process being recycled.
+The scraper runs **twice a day on weekdays — 12:00 PM and 6:00 PM Pacific**
+(`app/scheduler.py`, APScheduler `BackgroundScheduler` with two `CronTrigger`
+jobs, `day_of_week="mon-fri"`), plus once on startup if `SCRAPE_ON_STARTUP=1`
+and the stored feed is stale. It runs in-process, so a single Render web
+service is enough for the demo — no separate cron job needed. Configurable via:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SCRAPER_ENABLED` | `1` | Disable the scheduled jobs entirely |
+| `SCRAPER_TIMEZONE` | `US/Pacific` | Timezone the 12 PM / 6 PM triggers are evaluated in |
 
 ## Environment
 
@@ -143,6 +149,7 @@ All configuration comes from the root `.env` file:
 | `GOOGLE_AUTH_CLIENT_ID` | — | Google OAuth Web client ID (for token verification) |
 | `GOOGLE_AUTH_CLIENT_SECRET` | — | Google OAuth secret (reserved for future use) |
 | `SCRAPE_ON_STARTUP` | `1` | Scrape at boot when the stored feed is stale |
+| `DATABASE_URL` | — | `postgresql://...` for production; unset falls back to local SQLite |
 | `ANTHROPIC_API_KEY` | — | Enables the intake reasoner. Without it, intake falls back to keyword matching and says so |
 | `INTAKE_MODEL` | `claude-opus-5` | Model for `POST /api/case/intake` |
 | `INTAKE_EFFORT` | `medium` | Reasoning effort — intake is a bounded classification, not open-ended research |
@@ -156,10 +163,11 @@ All configuration comes from the root `.env` file:
 
 ## Storage
 
-SQLite at `backend/data/news.sqlite3`, created on first run — the smallest thing
-that survives a restart. When the Postgres schema in PROJECT_PRD §7a lands,
-`news_alerts` replaces this table and per-user matching moves into SQL; the
-shapes in `app/models.py` are already compatible.
+SQLAlchemy over either backend, picked by `DATABASE_URL` (`app/database.py`,
+`app/store.py`): set it to a `postgresql://` connection string in production
+(pooled connection settings applied automatically), or leave it unset for
+local dev and it falls back to SQLite at `backend/data/news.sqlite3`, created
+on first run.
 
 ## Not built yet
 
