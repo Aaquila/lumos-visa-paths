@@ -100,19 +100,38 @@ class _NewsPageState extends State<NewsPage> {
   Future<PersonalisedNewsFeed> _fetchPage(int offset) async {
     // Return public feed if not authenticated
     if (!_isAuthenticated) {
-      final plain = await NewsService.instance.alerts();
-      return PersonalisedNewsFeed(
-        items: plain.items
-            .map((item) => NewsItemWithReadStatus(item: item, isRead: false))
-            .toList(),
-        total: plain.total,
-        offline: plain.offline,
-      );
+      return _publicFeed();
     }
 
-    return await NewsService.instance.getNews(
+    final result = await NewsService.instance.getNews(
       limit: _pageSize,
       offset: offset,
+    );
+
+    // The personalized feed failed (expired session, backend hiccup, etc).
+    // Rather than block the page on an error, fall back to this year's
+    // public updates — an empty result there just renders the empty state.
+    if (result.error != null || result.offline) {
+      return _publicFeed();
+    }
+
+    return result;
+  }
+
+  /// The public feed, trimmed to this year's updates, used whenever the
+  /// personalized feed is unavailable.
+  Future<PersonalisedNewsFeed> _publicFeed() async {
+    final plain = await NewsService.instance.alerts();
+    final thisYear = DateTime.now().year;
+    final items = [
+      for (final item in plain.items)
+        if (item.date == null || item.date!.year == thisYear)
+          NewsItemWithReadStatus(item: item, isRead: false),
+    ];
+    return PersonalisedNewsFeed(
+      items: items,
+      total: items.length,
+      offline: plain.offline,
     );
   }
 
@@ -175,12 +194,21 @@ class _NewsPageState extends State<NewsPage> {
     await _loadInitial();
   }
 
-  /// Sorts articles by read status (unread first).
+  /// Signed-in readers see unread articles first, newest within each group.
+  /// Signed-out readers have no read status to group by, so the public feed
+  /// is just newest to oldest.
   List<NewsItemWithReadStatus> _sortedItems() {
     final items = List.of(_allItems);
     items.sort((a, b) {
-      if (a.isRead == b.isRead) return 0;
-      return a.isRead ? 1 : -1;
+      if (_isAuthenticated && a.isRead != b.isRead) {
+        return a.isRead ? 1 : -1;
+      }
+      final aDate = a.item.date;
+      final bDate = b.item.date;
+      if (aDate == null && bDate == null) return 0;
+      if (aDate == null) return 1;
+      if (bDate == null) return -1;
+      return bDate.compareTo(aDate);
     });
     return items;
   }
@@ -364,19 +392,28 @@ class _NewsPageState extends State<NewsPage> {
       children: [
         StepBadge(
           step: 'News',
-          descriptor: 'personalized for you',
+          descriptor: _isAuthenticated
+              ? 'personalized for you'
+              : 'general updates',
         ),
         const SizedBox(height: T.s16),
         Text(
-          'Your personalized updates',
+          _isAuthenticated
+              ? 'Your personalized updates'
+              : 'Latest immigration news',
           style: AppTheme.headingLg(context),
         ),
         const SizedBox(height: T.s8),
         ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 760),
           child: Text(
-            'Rules, notices and alerts from USCIS, DHS, the State Department '
-            'and DOL. Unread articles appear first.',
+            _isAuthenticated
+                ? 'Rules, notices and alerts from USCIS, DHS, the State '
+                      'Department and DOL. Unread articles appear first.'
+                : 'Sign in and Lumos will show news personalized for your '
+                      'situation. Until then, this is every update we '
+                      'scrape from USCIS, DHS, the State Department and '
+                      'DOL, sorted newest to oldest.',
             style: AppTheme.body,
           ),
         ),

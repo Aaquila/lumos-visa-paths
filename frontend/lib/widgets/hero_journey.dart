@@ -184,7 +184,7 @@ class _JourneyPainter extends CustomPainter {
     // Extra room on the left so the traveller, who waits just short of each
     // checkpoint, still has clear ground at the very first one.
     final leftInset = inset + 76 * scale;
-    final railY = size.height * 0.70;
+    final railY = size.height * 0.55;
     final span = size.width - leftInset - inset;
     final gap = stops.length > 1 ? span / (stops.length - 1) : 0.0;
     final xs = [for (var i = 0; i < stops.length; i++) leftInset + i * gap];

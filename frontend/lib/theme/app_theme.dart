@@ -44,9 +44,15 @@ class AppTheme {
   /// Capped below the 118px token so the hero animation still clears the fold
   /// on a laptop viewport.
   static TextStyle displayXl(BuildContext c) => _inter(
-    Breaks.isMobile(c) ? 42 : (Breaks.isTablet(c) ? 62 : 78),
+    Breaks.isMobile(c) ? 30 : (Breaks.isTablet(c) ? 44 : 50),
     weight: FontWeight.w700,
-    height: 0.98,
+    height: 0.80,
+    tracking: -0.052,
+  );
+  static TextStyle displayX2(BuildContext c) => _inter(
+    Breaks.isMobile(c) ? 30 : (Breaks.isTablet(c) ? 44 : 50),
+    weight: FontWeight.w600,
+    height: 0.80,
     tracking: -0.052,
   );
   static TextStyle display(BuildContext c) => _inter(
@@ -56,9 +62,9 @@ class AppTheme {
     tracking: -0.053,
   );
   static TextStyle headingLg(BuildContext c) => _inter(
-    Breaks.isMobile(c) ? 32 : 48,
+    Breaks.isMobile(c) ? 32 : 40,
     weight: FontWeight.w700,
-    height: 1.09,
+    height: 1.0,
     tracking: -0.036,
   );
   static TextStyle heading(BuildContext c) => _inter(
@@ -85,6 +91,12 @@ class AppTheme {
     height: 1.5,
     tracking: -0.015,
     color: T.graphite,
+  );
+  static final bodyHighlight = _inter(
+    16,
+    height: 1.5,
+    tracking: -0.015,
+    color: const Color.fromARGB(255, 39, 144, 248),
   );
   static final bodySm = _inter(
     14,

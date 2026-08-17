@@ -224,24 +224,36 @@ class _Hero extends StatelessWidget {
             children: [
               Reveal(
                 child: Text(
-                  'Lumos',
+                  'LUMOS',
                   style: AppTheme.label.copyWith(
                     color: T.signalBlue,
-                    fontWeight: FontWeight.w600,
+                    fontWeight: FontWeight.w800,
                     letterSpacing: 1.4,
+                    fontSize: 45,
                   ),
                 ),
               ),
-              const SizedBox(height: T.s16),
+              const SizedBox(height: T.s8),
               Reveal(
                 delay: const Duration(milliseconds: 80),
                 child: Text(
-                  'Your immigration\nassistant.',
+                  'Your immigration assistant',
                   textAlign: TextAlign.center,
                   style: AppTheme.displayXl(context),
                 ),
               ),
-              const SizedBox(height: T.s24),
+              const SizedBox(height: T.s8),
+              Reveal(
+                delay: const Duration(milliseconds: 80),
+                child: Text(
+                  'for neurodivergent & struggling brains',
+                  textAlign: TextAlign.center,
+                  style: AppTheme.displayX2(
+                    context,
+                  ).copyWith(color: const Color.fromARGB(255, 32, 140, 248)),
+                ),
+              ),
+              const SizedBox(height: T.s16),
               Reveal(
                 delay: const Duration(milliseconds: 160),
                 child: ConstrainedBox(
@@ -256,9 +268,20 @@ class _Hero extends StatelessWidget {
                   ),
                 ),
               ),
-              const SizedBox(height: T.s32),
+              // A light touch of air before the illustration — no card, no
+              // border, just the journey itself at full width, wider than
+              // the text above and below it. The rail sits low in its own
+              // box already, so it needs little extra clearance up top.
+              const SizedBox(height: T.s2),
+              IgnorePointer(
+                child: Reveal(
+                  delay: const Duration(milliseconds: 180),
+                  child: HeroJourney(height: mobile ? 130 : 160),
+                ),
+              ),
+              const SizedBox(height: T.s2),
               Reveal(
-                delay: const Duration(milliseconds: 220),
+                delay: const Duration(milliseconds: 260),
                 child: Wrap(
                   spacing: T.s16,
                   runSpacing: T.s16,
@@ -281,31 +304,13 @@ class _Hero extends StatelessWidget {
               ),
               const SizedBox(height: T.s16),
               Reveal(
-                delay: const Duration(milliseconds: 260),
+                delay: const Duration(milliseconds: 300),
                 child: Text(
                   'Google sign-in · No documents · No card',
                   style: AppTheme.caption,
                 ),
               ),
               SizedBox(height: mobile ? T.s32 : T.s48),
-              Reveal(
-                delay: const Duration(milliseconds: 300),
-                offset: 40,
-                child: Container(
-                  width: double.infinity,
-                  padding: EdgeInsets.symmetric(
-                    horizontal: mobile ? T.s8 : T.s24,
-                    vertical: T.s24,
-                  ),
-                  decoration: BoxDecoration(
-                    color: T.paper,
-                    borderRadius: BorderRadius.circular(T.rFeatureCard),
-                    border: Border.fromBorderSide(T.hairline),
-                    boxShadow: T.floatShadow,
-                  ),
-                  child: HeroJourney(height: mobile ? 200 : 250),
-                ),
-              ),
             ],
           ),
         ),
@@ -328,7 +333,7 @@ class _WhyThisExists extends StatelessWidget {
       children: [
         const Reveal(
           child: StepBadge(
-            step: 'Why this exists',
+            step: 'Why you need this',
             descriptor: 'the honest version',
           ),
         ),
@@ -356,27 +361,25 @@ class _WhyThisExists extends StatelessWidget {
                   children: [
                     Text(
                       'Immigration asks you to track hard dates, read policy '
-                      'language and act early — on top of a job, a degree, a '
-                      'family, and everything else. One missed window can '
-                      'cost years.',
+                      'language and act early, on top of a job, a degree, a '
+                      'family, and everything else. '
+                      'One missed window can cost years.',
                       style: AppTheme.body,
                     ),
                     const SizedBox(height: T.s16),
                     Text(
                       'Plenty of us do that while anxious, stretched thin, or '
-                      'wired in a way that makes long-range planning harder. '
-                      'ADHD and autism are more common than the paperwork '
-                      'assumes. That is not a character flaw — it is a '
-                      'design problem, and the design has never been on '
-                      'your side.',
+                      'have a brain wired in a way that makes long-range planning harder. '
+                      'ADHD/autism makes tracking harder. This solution helps the '
+                      'design to be on your side.',
                       style: AppTheme.body,
                     ),
                     const SizedBox(height: T.s16),
                     Text(
-                      'So Lumos holds the state for you: remembers the '
+                      'Lumos holds the state for you: remembers the '
                       'dates, shows only what is relevant, and cuts big '
                       'processes down to the one thing to do next.',
-                      style: AppTheme.body,
+                      style: AppTheme.bodyHighlight,
                     ),
                   ],
                 ),
@@ -415,10 +418,10 @@ class _WhatItDoes extends StatelessWidget {
         T.pastelPeach,
       ),
       (
-        'Translates the news for you',
-        'Policy changes constantly, and most of it is noise for you. Lumos '
-            'follows official updates and tells you the one thing that '
-            'matters: whether this changes anything for your case.',
+        'Filters the news for you',
+        'Not every immigration update needs your attention. Lumos scrapes '
+            'all of it, then surfaces only the news that actually applies '
+            'to your situation — nothing more.',
         Icons.campaign_outlined,
         T.pastelMint,
       ),
@@ -436,20 +439,20 @@ class _WhatItDoes extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         const Reveal(
-          child: StepBadge(step: 'What it does', descriptor: 'four things'),
+          child: StepBadge(step: 'What it does', descriptor: 'four features'),
         ),
-        const SizedBox(height: T.s24),
+        const SizedBox(height: T.s16),
         Reveal(
           delay: const Duration(milliseconds: 60),
           child: Text(
-            'One place for the whole thing.',
+            'Keep the clutter and chaos minimal',
             style: AppTheme.headingLg(context),
           ),
         ),
-        const SizedBox(height: T.s48),
+        const SizedBox(height: T.s24),
         Wrap(
-          spacing: T.s24,
-          runSpacing: T.s24,
+          spacing: T.s16,
+          runSpacing: T.s16,
           children: [
             for (var i = 0; i < items.length; i++)
               SizedBox(

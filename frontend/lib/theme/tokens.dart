@@ -28,6 +28,8 @@ class T {
   static const pastelSky = Color(0xFFD6E9FF);
 
   // ── Spacing (8px base) ────────────────────────────────────────────────────
+  static const s2 = 2.0;
+  static const s4 = 4.0;
   static const s8 = 8.0;
   static const s16 = 16.0;
   static const s24 = 24.0;

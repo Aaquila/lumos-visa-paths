@@ -5,9 +5,9 @@ import 'package:flutter/material.dart';
 import '../theme/app_theme.dart';
 import '../theme/tokens.dart';
 
-/// The one hero CTA per page. It is a pill whose right edge is a hand-drawn
-/// wavy contour rather than a clean semicircle — used exactly once, never on a
-/// secondary or repeated action (design doc, "Button Geometry").
+/// The one hero CTA per page. A clean pill with a light streak that travels
+/// endlessly around its border — used exactly once, never on a secondary or
+/// repeated action (design doc, "Button Geometry").
 class WavyCta extends StatefulWidget {
   const WavyCta({
     super.key,
@@ -28,18 +28,18 @@ class _WavyCtaState extends State<WavyCta> with SingleTickerProviderStateMixin {
   bool _hover = false;
   bool _focused = false;
 
-  /// The wave rolls slowly, so the sketched edge reads as drawn, not clipped.
+  /// One lap of the border per cycle — slow enough to read as ambient, not
+  /// distracting.
   late final AnimationController _wave = AnimationController(
     vsync: this,
-    duration: const Duration(seconds: 6),
+    duration: const Duration(seconds: 3),
   );
 
   @override
   void didChangeDependencies() {
     super.didChangeDependencies();
-    // A pill whose edge ripples forever is exactly the kind of ambient motion
-    // "reduce motion" exists to stop. Park it on a fixed phase instead — the
-    // sketched contour is still there, it just holds still.
+    // A border that travels forever is exactly the kind of ambient motion
+    // "reduce motion" exists to stop. Park it on a fixed phase instead.
     if (Motion.reduced(context)) {
       _wave.stop();
       _wave.value = 0;
@@ -98,12 +98,9 @@ class _WavyCtaState extends State<WavyCta> with SingleTickerProviderStateMixin {
               ),
               child: ExcludeSemantics(
                 child: Padding(
-                  // Extra right padding leaves room for the wavy tail.
-                  padding: const EdgeInsets.fromLTRB(
-                    T.s40,
-                    T.s16,
-                    T.s56,
-                    T.s16,
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: T.s32,
+                    vertical: T.s16,
                   ),
                   child: Row(
                     mainAxisSize: MainAxisSize.min,
@@ -150,48 +147,48 @@ class _WavyPillPainter extends CustomPainter {
   final double phase;
   final Color color;
 
-  /// Draws the keyboard focus ring — the sketched contour means a plain
-  /// rectangular outline would not sit on the shape, so the ring follows the
-  /// same path the fill does.
+  /// Draws the keyboard focus ring, following the same pill the fill does.
   final bool focused;
 
   @override
   void paint(Canvas canvas, Size size) {
-    final h = size.height;
-    final r = h / 2;
-    final path = Path()..moveTo(r, 0);
+    final rrect = RRect.fromRectAndRadius(
+      Offset.zero & size,
+      Radius.circular(size.height / 2),
+    );
 
-    // Flat top edge up to the start of the tail.
-    path.lineTo(size.width - r, 0);
-
-    // Wavy right cap: a semicircle whose radius ripples.
-    const steps = 44;
-    for (var i = 0; i <= steps; i++) {
-      final a = -math.pi / 2 + math.pi * (i / steps);
-      final wobble = 1 + 0.075 * math.sin(a * 4 + phase);
-      final rr = r * wobble;
-      path.lineTo(size.width - r + rr * math.cos(a), r + rr * math.sin(a));
-    }
-
-    path
-      ..lineTo(r, h)
-      // Clean semicircular cap on the left — only the tail is sketched.
-      ..arcToPoint(Offset(r, 0), radius: Radius.circular(r), clockwise: true)
-      ..close();
-
-    // Sky Wash glow, drawn as a soft halo rather than an elevation shadow so it
-    // stays centred on the sketched outline.
-    canvas.drawPath(
-      path,
+    // Sky Wash glow, drawn as a soft halo rather than an elevation shadow.
+    canvas.drawRRect(
+      rrect,
       Paint()
         ..color = T.skyWash.withValues(alpha: 0.75)
         ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 9),
     );
-    canvas.drawPath(path, Paint()..color = color);
+    canvas.drawRRect(rrect, Paint()..color = color);
+
+    // A light streak that travels endlessly around the border — a simple
+    // stand-in for the old hand-sketched wobble.
+    canvas.drawRRect(
+      rrect.deflate(1),
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 2
+        ..shader = SweepGradient(
+          colors: const [
+            Colors.transparent,
+            Colors.transparent,
+            Colors.white,
+            Colors.transparent,
+            Colors.transparent,
+          ],
+          stops: const [0, 0.42, 0.5, 0.58, 1],
+          transform: GradientRotation(phase),
+        ).createShader(Offset.zero & size),
+    );
 
     if (focused) {
-      canvas.drawPath(
-        path,
+      canvas.drawRRect(
+        rrect,
         Paint()
           ..style = PaintingStyle.stroke
           ..strokeWidth = 3
