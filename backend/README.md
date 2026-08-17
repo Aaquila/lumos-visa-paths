@@ -11,10 +11,17 @@ the pathway graph. The rest of the API surface is specified in
 ```bash
 cd backend
 pip install -r requirements.txt
+# Using the run script (reads BACKEND_HOST and BACKEND_PORT from .env):
+../scripts/run_backend.sh
+
+# Or manually with uvicorn (uses 127.0.0.1:8000 by default):
 uvicorn app.main:app --reload --port 8000
 ```
 
 Then open <http://127.0.0.1:8000/docs> for the generated OpenAPI page.
+
+To change the host or port, edit `BACKEND_HOST` and `BACKEND_PORT` in the root
+`.env` file. Or pass them to the script: `./scripts/run_backend.sh --host 0.0.0.0 --port 9000`.
 
 The frontend points at `http://127.0.0.1:8000` by default. To aim it elsewhere:
 
@@ -124,8 +131,14 @@ identical work, but it survives the web process being recycled.
 
 ## Environment
 
+All configuration comes from the root `.env` file:
+
 | Variable | Default | Meaning |
 |---|---|---|
+| `BACKEND_HOST` | `127.0.0.1` | Host to bind to (0.0.0.0 for all interfaces) |
+| `BACKEND_PORT` | | Port to listen on |
+| `GOOGLE_AUTH_CLIENT_ID` | — | Google OAuth Web client ID (for token verification) |
+| `GOOGLE_AUTH_CLIENT_SECRET` | — | Google OAuth secret (reserved for future use) |
 | `SCRAPE_ON_STARTUP` | `1` | Scrape at boot when the stored feed is stale |
 | `ANTHROPIC_API_KEY` | — | Enables the intake reasoner. Without it, intake falls back to keyword matching and says so |
 | `INTAKE_MODEL` | `claude-opus-5` | Model for `POST /api/case/intake` |
