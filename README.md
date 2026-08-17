@@ -63,6 +63,7 @@ small thing to do next.
 |---|---|
 | [docs/PROJECT_PRD.md](docs/PROJECT_PRD.md) | Product requirements, scope, rollout order, data model |
 | [docs/SUBMISSION.md](docs/SUBMISSION.md) | Elevator pitch, project story, demo script |
+| [docs/Lumos_Pitch_Deck.pdf](docs/Lumos_Pitch_Deck.pdf) | 5-slide pitch deck, built from landing page screenshots |
 | [docs/generic_pathways.json](docs/generic_pathways.json) | The pathway graph: 40 statuses, 55 transitions, 12 families |
 | [frontend/](frontend/) | Flutter web app — **built**, see [frontend/README.md](frontend/README.md) |
 | [frontend/docs/](frontend/docs/) | UI PRD, the Flowmapp design system, HTML mockup |
