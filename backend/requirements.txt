@@ -14,6 +14,7 @@ anthropic>=0.75,<1.0
 pyjwt[crypto]>=2.9,<3.0
 # Scheduled tasks: weekday news scraper with timezone support.
 APScheduler>=3.10,<4.0
+pytz>=2024.1
 # SQLAlchemy ORM for database persistence.
 sqlalchemy>=2.0,<3.0
 psycopg2-binary>=2.9,<3.0

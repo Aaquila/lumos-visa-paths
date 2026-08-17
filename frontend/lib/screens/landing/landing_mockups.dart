@@ -56,7 +56,7 @@ class SpinePreview extends StatelessWidget {
     final points = <String, Offset>{
       for (var i = 0; i < spine.length; i++)
         spine[i]: Offset(0.06 + i * (0.88 / divisor), spineY),
-      ?branch: const Offset(0.5, 0.78),
+      if (branch != null) branch: const Offset(0.5, 0.78),
     };
 
     return LayoutBuilder(
@@ -77,7 +77,7 @@ class SpinePreview extends StatelessWidget {
                 branchOut: branch == null ? null : px(spine.last),
               ),
             ),
-            for (final id in [...spine, ?branch])
+            for (final id in [...spine, if (branch != null) branch])
               Positioned(
                 left: px(id).dx - 58,
                 top: px(id).dy - 21,
