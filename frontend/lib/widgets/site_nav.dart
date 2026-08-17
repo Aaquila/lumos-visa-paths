@@ -43,6 +43,12 @@ class SiteNav extends StatelessWidget {
                     const _Wordmark(),
                     const Spacer(),
                     if (!compact) ...[
+                      if (auth.isSignedIn)
+                        _NavLink(
+                          label: 'My pathway',
+                          active: activeRoute == '/dashboard',
+                          onTap: () => context.go('/dashboard'),
+                        ),
                       _NavLink(
                         label: 'Pathways',
                         active: activeRoute == '/visa-pathways',
@@ -68,16 +74,15 @@ class SiteNav extends StatelessWidget {
                       const Spacer(),
                     ],
                     if (auth.isSignedIn) ...[
-                      if (!compact) ...[
-                        _AccountChip(session: auth.session!),
-                        const SizedBox(width: T.s8),
-                      ],
-                      PillButton(
-                        label: 'My pathway',
-                        variant: PillVariant.ink,
-                        trailingIcon: Icons.arrow_forward,
-                        onPressed: () => context.go('/dashboard'),
-                      ),
+                      if (!compact)
+                        _AccountChip(session: auth.session!)
+                      else
+                        PillButton(
+                          label: 'My pathway',
+                          variant: PillVariant.ink,
+                          trailingIcon: Icons.arrow_forward,
+                          onPressed: () => context.go('/dashboard'),
+                        ),
                     ] else ...[
                       if (!compact) ...[
                         PillButton(
