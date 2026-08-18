@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import date
+from datetime import date, datetime, timezone
 
 import httpx
 
@@ -263,7 +263,9 @@ class VoiceAssistant:
     ) -> VoiceAssistantResponse:
         assert self._client is not None
 
+        today = datetime.now(timezone.utc).date()
         context_lines = [
+            f"Today's date: {today}",
             f"Current status (in their words): {request.case.current_status_text or 'not given'}",
             f"Goal (in their words): {request.case.goal_text or 'not given'}",
             "Current deadlines:",

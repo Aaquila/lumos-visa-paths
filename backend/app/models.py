@@ -665,3 +665,23 @@ class VoiceSpeakRequest(BaseModel):
     """`POST /api/voice/speak` — text in, spoken audio out."""
 
     text: str = Field(min_length=1, max_length=600)
+
+
+class GoogleSessionRequest(BaseModel):
+    """`POST /api/auth/session` — a Google ID token, exchanged once."""
+
+    id_token: str = Field(min_length=1)
+
+
+class SessionTokenResponse(BaseModel):
+    """`POST /api/auth/session` — the Lumos session token that replaces it.
+
+    Google ID tokens live about an hour and the browser SDK does not renew
+    them, so the client cannot keep presenting one for the length of a signed-in
+    visit. This is the longer-lived token it presents instead; `expires_at` is
+    when the client must sign in again.
+    """
+
+    access_token: str
+    expires_at: datetime
+    token_type: str = "Bearer"

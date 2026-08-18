@@ -29,7 +29,6 @@ flutter:
   uses-material-design: true
 
   assets:
-    - .env
     - assets/data/generic_pathways.json
     - assets/data/evidence_criteria_o1_eb1.json
 

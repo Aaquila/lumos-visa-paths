@@ -252,19 +252,7 @@ class VoiceAssistantService extends ChangeNotifier {
 
   // ── Backend calls ─────────────────────────────────────────────────────────
 
-  Map<String, String> _authHeaders() {
-    final headers = <String, String>{};
-    final session = AuthService.instance.session;
-    final token = session?.idToken;
-    if (session != null &&
-        !session.isDemo &&
-        session.isValid &&
-        token != null &&
-        token.isNotEmpty) {
-      headers['Authorization'] = 'Bearer $token';
-    }
-    return headers;
-  }
+  Map<String, String> _authHeaders() => AuthService.instance.authHeaders;
 
   Future<Map<String, dynamic>> _ask(String transcript) async {
     final situation = AuthService.instance.onboarding.situation;

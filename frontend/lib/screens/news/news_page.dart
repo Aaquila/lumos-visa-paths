@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:go_router/go_router.dart';
 
 import '../../models/news_item.dart';
 import '../../services/auth_service.dart';
@@ -79,7 +80,7 @@ class _NewsPageState extends State<NewsPage> {
     _isAuthenticated =
         AuthService.instance.session != null &&
         !AuthService.instance.session!.isDemo;
-    _lastAuthToken = AuthService.instance.session?.idToken;
+    _lastAuthToken = AuthService.instance.apiToken;
     AuthService.instance.addListener(_onAuthChanged);
     _loadInitial();
   }
@@ -91,12 +92,15 @@ class _NewsPageState extends State<NewsPage> {
     super.dispose();
   }
 
-  /// Re-fetches once a real ID token shows up after a token-less restore —
-  /// see [_lastAuthToken]. Without this, a page loaded from a restored
-  /// session stays on the public fallback feed for the rest of the visit
-  /// even after the background silent re-auth succeeds.
+  /// Re-fetches once a usable token shows up — the sign-in token exchange
+  /// (`POST /api/auth/session`) completes a beat after the session itself
+  /// lands. Without this, a page opened in that beat stays on the public
+  /// fallback feed for the rest of the visit.
   void _onAuthChanged() {
-    final token = AuthService.instance.session?.idToken;
+    final session = AuthService.instance.session;
+    _isAuthenticated = session != null && !session.isDemo;
+
+    final token = AuthService.instance.apiToken;
     if (token != null && token.isNotEmpty && token != _lastAuthToken) {
       _lastAuthToken = token;
       _loadInitial(forceRefresh: true);
@@ -353,11 +357,22 @@ class _NewsPageState extends State<NewsPage> {
                   children: [
                     Text(error, style: AppTheme.bodySm),
                     const SizedBox(height: T.s8),
-                    PillButton(
-                      label: 'Try again',
-                      icon: Icons.refresh,
-                      onPressed: _loadInitial,
-                    ),
+                    // Retrying is only worth offering when a retry could
+                    // succeed. With no credential the backend accepts, every
+                    // "try again" is another 401 — the way out is the sign-in
+                    // screen, so say that instead.
+                    if (AuthService.instance.needsReauth)
+                      PillButton(
+                        label: 'Sign in again',
+                        icon: Icons.login,
+                        onPressed: () => context.go('/signin'),
+                      )
+                    else
+                      PillButton(
+                        label: 'Try again',
+                        icon: Icons.refresh,
+                        onPressed: _loadInitial,
+                      ),
                   ],
                 ),
               ),

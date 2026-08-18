@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_sign_in/google_sign_in.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/onboarding_profile.dart';
@@ -18,6 +19,8 @@ class UserSession {
     this.onboarding = OnboardingProfile.empty,
     this.photoUrl,
     this.idToken,
+    this.sessionToken,
+    this.sessionExpiresAt,
     this.isDemo = false,
   });
 
@@ -43,6 +46,38 @@ class UserSession {
   /// verifies it once and issues its own session.
   final String? idToken;
 
+  /// The Lumos session token the backend issued in exchange for [idToken]
+  /// (`POST /api/auth/session`).
+  ///
+  /// This, not [idToken], is what authenticates `/api/user/*` calls. The Google
+  /// token dies within the hour and cannot be renewed from the browser, so a
+  /// session that outlived it — or any session restored from storage, since the
+  /// Google token is deliberately never persisted — would otherwise have no
+  /// credential left to present and every personalized request would 401.
+  final String? sessionToken;
+
+  /// When [sessionToken] stops being accepted. Tracked separately from
+  /// [expiresAt] because the backend decides it, not this client.
+  final DateTime? sessionExpiresAt;
+
+  /// The bearer token for backend calls, or null when we hold none worth
+  /// sending.
+  ///
+  /// A demo session has no identity to prove and an expired token turns a
+  /// working page into a 401, so both resolve to null rather than to something
+  /// the server will reject.
+  String? get apiToken {
+    if (isDemo) return null;
+    final session = sessionToken;
+    if (session != null && session.isNotEmpty) {
+      final until = sessionExpiresAt;
+      if (until == null || DateTime.now().isBefore(until)) return session;
+    }
+    final google = idToken;
+    if (google != null && google.isNotEmpty) return google;
+    return null;
+  }
+
   /// True when running without a configured OAuth client, so the UI can say so
   /// rather than implying a real identity.
   final bool isDemo;
@@ -66,14 +101,24 @@ class UserSession {
 
   bool get hasChosenName => onboarding.hasName;
 
-  UserSession withOnboarding(OnboardingProfile value) => UserSession(
+  UserSession withOnboarding(OnboardingProfile value) => copyWith(
+    onboarding: value,
+  );
+
+  UserSession copyWith({
+    OnboardingProfile? onboarding,
+    String? sessionToken,
+    DateTime? sessionExpiresAt,
+  }) => UserSession(
     displayName: displayName,
     email: email,
     expiresAt: expiresAt,
     userId: userId,
-    onboarding: value,
+    onboarding: onboarding ?? this.onboarding,
     photoUrl: photoUrl,
     idToken: idToken,
+    sessionToken: sessionToken ?? this.sessionToken,
+    sessionExpiresAt: sessionExpiresAt ?? this.sessionExpiresAt,
     isDemo: isDemo,
   );
 
@@ -94,11 +139,15 @@ class UserSession {
     'userId': userId,
     'onboarding': onboarding.toJson(),
     'photoUrl': photoUrl,
+    'sessionToken': sessionToken,
+    'sessionExpiresAt': sessionExpiresAt?.toIso8601String(),
     'isDemo': isDemo,
   };
 
   /// The ID token is deliberately not persisted — it expires within the hour
-  /// and storing it buys nothing.
+  /// and storing it buys nothing. The Lumos session token *is*: it is the only
+  /// credential a restored session has, and without it a reloaded page can
+  /// call nothing under `/api/user/`.
   factory UserSession.fromJson(Map<String, dynamic> j) => UserSession(
     displayName: j['displayName'] as String? ?? '',
     email: j['email'] as String? ?? '',
@@ -111,6 +160,10 @@ class UserSession {
           )
         : OnboardingProfile.empty,
     photoUrl: j['photoUrl'] as String?,
+    sessionToken: j['sessionToken'] as String?,
+    sessionExpiresAt: DateTime.tryParse(
+      j['sessionExpiresAt'] as String? ?? '',
+    ),
     isDemo: j['isDemo'] as bool? ?? false,
   );
 }
@@ -157,6 +210,37 @@ class AuthService extends ChangeNotifier {
   UserSession? _session;
   UserSession? get session => _session;
   bool get isSignedIn => _session != null && _session!.isValid;
+
+  /// The bearer token every backend call should send, or null when we hold
+  /// none. One accessor so no service has to know which of the two tokens is
+  /// the live one — see [UserSession.apiToken].
+  String? get apiToken {
+    final current = _session;
+    if (current == null || !current.isValid) return null;
+    return current.apiToken;
+  }
+
+  /// `{'Authorization': 'Bearer …'}` when we can authenticate, `{}` otherwise.
+  Map<String, String> get authHeaders {
+    final token = apiToken;
+    return token == null ? const {} : {'Authorization': 'Bearer $token'};
+  }
+
+  /// True when somebody is signed in as far as this app is concerned but we
+  /// have no credential the backend will accept — a session restored before
+  /// the token exchange existed, or one whose backend session has expired.
+  /// The personalized screens use this to say "sign in again" rather than
+  /// showing an empty feed as though there were no news.
+  bool get needsReauth => isSignedIn && !(_session?.isDemo ?? false) && apiToken == null;
+
+  /// Where the backend lives — same BACKEND_HOST/BACKEND_PORT the other
+  /// services read, kept here rather than imported so this file keeps no
+  /// dependency on them.
+  static String get _backendBaseUrl {
+    final host = dotenv.env['BACKEND_HOST'] ?? '127.0.0.1';
+    final port = dotenv.env['BACKEND_PORT'] ?? '8000';
+    return 'http://$host:$port';
+  }
 
   bool _busy = false;
   bool get isBusy => _busy;
@@ -262,6 +346,56 @@ class AuthService extends ChangeNotifier {
     _error = null;
     unawaited(_persist());
     notifyListeners();
+
+    // Then trade the Google token for one that outlives it. Deliberately after
+    // the notify above: sign-in must not appear to hang on a backend round
+    // trip, and every screen that only needs a name works without it.
+    await _exchangeForBackendSession();
+  }
+
+  /// Swaps the Google ID token for the backend's own session token.
+  ///
+  /// Failure is not fatal and not surfaced as a sign-in error: the person is
+  /// signed in either way, and the screens that need the backend already say
+  /// so when it cannot be reached. What it does mean is that `apiToken` falls
+  /// back to the Google token, which works until it expires within the hour.
+  Future<void> _exchangeForBackendSession() async {
+    final current = _session;
+    final token = current?.idToken;
+    if (current == null || current.isDemo || token == null || token.isEmpty) {
+      return;
+    }
+
+    try {
+      final response = await http
+          .post(
+            Uri.parse('$_backendBaseUrl/api/auth/session'),
+            headers: const {'Content-Type': 'application/json'},
+            body: jsonEncode({'id_token': token}),
+          )
+          .timeout(const Duration(seconds: 10));
+      if (response.statusCode != 200) {
+        debugPrint('session exchange failed: ${response.statusCode}');
+        return;
+      }
+      final body = jsonDecode(response.body) as Map<String, dynamic>;
+      final accessToken = body['access_token'] as String?;
+      if (accessToken == null || accessToken.isEmpty) return;
+
+      // The session may have been replaced (signed out, signed in as somebody
+      // else) while the request was in flight; a token for the old identity
+      // must not land on the new one.
+      if (!identical(_session, current)) return;
+
+      _session = current.copyWith(
+        sessionToken: accessToken,
+        sessionExpiresAt: DateTime.tryParse(body['expires_at'] as String? ?? ''),
+      );
+      await _persist();
+      notifyListeners();
+    } catch (e) {
+      debugPrint('session exchange unavailable: $e');
+    }
   }
 
   void _fail(Object e) {

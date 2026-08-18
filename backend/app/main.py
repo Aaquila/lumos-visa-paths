@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import secrets
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -51,6 +52,7 @@ from .intake import MODEL as INTAKE_MODEL
 from .intake import IntakeResolver
 from .models import (
     AllNewsFeedResponse,
+    GoogleSessionRequest,
     IntakeRequest,
     IntakeResult,
     IntakeStatus,
@@ -63,6 +65,7 @@ from .models import (
     SaveSituationResponse,
     SavedSituation,
     ScrapeReport,
+    SessionTokenResponse,
     SituationInput,
     SourceInfo,
     UnreadCountResponse,
@@ -240,6 +243,109 @@ def verify_google_id_token(token: str) -> str:
     return str(subject)
 
 
+#: Google ID tokens live about an hour and the browser SDK does not renew them,
+#: so a page reloaded two hours into a signed-in visit has no credential left to
+#: present. The client therefore exchanges the Google token once, at sign-in,
+#: for the token minted below and presents that for the rest of the visit. It
+#: carries exactly what the Google token carried that we use — the `sub` — so
+#: nothing downstream can tell the two apart, and it is signed with a server
+#: secret, so only this server can mint one.
+SESSION_ISSUER = "lumos"
+SESSION_TTL = timedelta(days=14)
+
+#: Set `LUMOS_SESSION_SECRET` in any deployment you expect sessions to survive a
+#: restart. Without it we mint a per-process random secret: sessions still work,
+#: they just stop verifying when the server restarts, which is the right failure
+#: for a misconfigured server (everyone signs in again) rather than the wrong
+#: one (a hardcoded default that every deployment shares).
+_SESSION_SECRET = os.getenv("LUMOS_SESSION_SECRET", "").strip()
+if not _SESSION_SECRET:
+    _SESSION_SECRET = secrets.token_urlsafe(48)
+    log.warning(
+        "LUMOS_SESSION_SECRET is not set; using a per-process secret. "
+        "Signed-in sessions will not survive a server restart."
+    )
+
+
+def mint_session_token(subject: str, *, now: datetime | None = None) -> tuple[str, datetime]:
+    """A Lumos session token for `subject`, and when it expires."""
+    issued = now or utcnow()
+    expires = issued + SESSION_TTL
+    token = jwt.encode(
+        {
+            "iss": SESSION_ISSUER,
+            "sub": subject,
+            "iat": int(issued.timestamp()),
+            "exp": int(expires.timestamp()),
+        },
+        _SESSION_SECRET,
+        algorithm="HS256",
+    )
+    return token, expires
+
+
+def _is_session_token(token: str) -> bool:
+    """True for a token that claims to be ours, without trusting the claim.
+
+    Read unverified purely to pick which verifier to run — `verify_session_token`
+    then checks the signature properly, so a forged `iss` buys an attacker
+    nothing but a different 401 message.
+    """
+    try:
+        claims = jwt.decode(token, options={"verify_signature": False})
+    except Exception:  # noqa: BLE001 — malformed tokens are not ours
+        return False
+    return claims.get("iss") == SESSION_ISSUER
+
+
+def verify_session_token(token: str) -> str:
+    """Verify a Lumos session token and return its `sub`, or raise 401."""
+    try:
+        claims = jwt.decode(
+            token,
+            _SESSION_SECRET,
+            algorithms=["HS256"],
+            issuer=SESSION_ISSUER,
+            options={"require": ["exp", "iat", "iss", "sub"]},
+        )
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(
+            status_code=401, detail="That session has expired. Sign in again."
+        ) from None
+    except Exception:  # noqa: BLE001 — bad signature, malformed, wrong issuer
+        raise HTTPException(
+            status_code=401, detail="That session token could not be verified."
+        ) from None
+
+    subject = claims.get("sub")
+    if not subject:
+        raise HTTPException(status_code=401, detail="That session carries no subject.")
+    return str(subject)
+
+
+def _bearer_token(authorization: str) -> str:
+    """The token out of an `Authorization: Bearer <token>` header, or 401."""
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        raise HTTPException(
+            status_code=401,
+            detail="Authorization must be 'Bearer <token>'.",
+        )
+    return token.strip()
+
+
+def subject_from_bearer(authorization: str) -> str:
+    """The caller's `sub`, from either token we accept.
+
+    Both paths verify signatures; the only thing the issuer check picks is
+    *which* key to verify against.
+    """
+    token = _bearer_token(authorization)
+    if _is_session_token(token):
+        return verify_session_token(token)
+    return verify_google_id_token(token)
+
+
 async def optional_caller(
     authorization: str | None = Header(default=None),
 ) -> str | None:
@@ -256,13 +362,7 @@ async def optional_caller(
     if authorization is None:
         return None
 
-    scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token.strip():
-        raise HTTPException(
-            status_code=401,
-            detail="Authorization must be 'Bearer <google-id-token>'.",
-        )
-    return verify_google_id_token(token.strip())
+    return subject_from_bearer(authorization)
 
 
 def _get_or_create_user(db: Session, subject: str) -> User:
@@ -303,14 +403,7 @@ async def required_user(
             detail="Authorization header required.",
         )
 
-    scheme, _, token = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not token.strip():
-        raise HTTPException(
-            status_code=401,
-            detail="Authorization must be 'Bearer <google-id-token>'.",
-        )
-
-    subject = verify_google_id_token(token.strip())
+    subject = subject_from_bearer(authorization)
     return _get_or_create_user(db, subject)
 
 #: Intake and the voice endpoints are the LLM/ElevenLabs-backed endpoints here
@@ -744,6 +837,32 @@ async def refresh() -> ScrapeReport:
     if _scrape_lock.locked():
         raise HTTPException(status_code=409, detail="A scrape is already running.")
     return await run_scrape()
+
+
+# ── Sign-in (Google ID token in, Lumos session token out) ────────────────────
+
+
+@app.post("/api/auth/session", response_model=SessionTokenResponse)
+async def create_session(
+    payload: GoogleSessionRequest,
+    db: Session = Depends(get_db),
+) -> SessionTokenResponse:
+    """Exchange a Google ID token for a Lumos session token.
+
+    Called once, immediately after Google sign-in. The Google token is verified
+    here exactly as `required_user` would verify it — this endpoint is not a
+    weaker door into the same house — and the caller gets back a token they can
+    keep using after Google's has expired, which the browser SDK gives them no
+    way to renew. Registration still happens on the spot for a first-time
+    subject, so the `User` row exists before the first personalized request.
+
+    Only `sub` crosses over into the session token. The email and name in the
+    Google token are not read here either.
+    """
+    subject = verify_google_id_token(payload.id_token.strip())
+    _get_or_create_user(db, subject)
+    token, expires = mint_session_token(subject)
+    return SessionTokenResponse(access_token=token, expires_at=expires)
 
 
 # ── User situation (persisted — the one exception to "nothing is stored") ─────

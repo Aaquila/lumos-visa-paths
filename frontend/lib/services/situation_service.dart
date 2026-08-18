@@ -41,15 +41,8 @@ class SituationService {
   Future<bool> save(VisaSituation situation) async {
     if (!situation.hasStatus) return false;
 
-    final session = AuthService.instance.session;
-    final token = session?.idToken;
-    if (session == null ||
-        session.isDemo ||
-        !session.isValid ||
-        token == null ||
-        token.isEmpty) {
-      return false;
-    }
+    final token = AuthService.instance.apiToken;
+    if (token == null) return false;
 
     try {
       final response = await http

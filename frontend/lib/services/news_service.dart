@@ -124,26 +124,18 @@ class NewsService {
     }
   }
 
-  /// Request headers, with the Google ID token attached when we hold a real
-  /// one.
+  /// Request headers, with the caller's bearer token attached when we hold a
+  /// live one — the Lumos session token normally, the Google ID token in the
+  /// moment before the exchange completes (see [AuthService.apiToken]).
   ///
   /// The backend verifies a presented token properly and rejects a bad one, so
   /// sending a stale token would turn a working page into a 401. Only a live,
-  /// non-demo token is attached; without one the endpoint is still served,
-  /// because it is genuinely public.
-  Map<String, String> _headers() {
-    final headers = {'Content-Type': 'application/json'};
-    final session = AuthService.instance.session;
-    final token = session?.idToken;
-    if (session != null &&
-        !session.isDemo &&
-        session.isValid &&
-        token != null &&
-        token.isNotEmpty) {
-      headers['Authorization'] = 'Bearer $token';
-    }
-    return headers;
-  }
+  /// non-demo token is attached; without one the public endpoints are still
+  /// served, because they are genuinely public.
+  Map<String, String> _headers() => {
+    'Content-Type': 'application/json',
+    ...AuthService.instance.authHeaders,
+  };
 
   Future<List<NewsSource>> sources() async {
     try {
