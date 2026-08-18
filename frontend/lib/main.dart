@@ -8,7 +8,12 @@ import 'theme/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await dotenv.load(fileName: '.env');
+  // Optional on purpose: this file holds public configuration only (the OAuth
+  // web client id, which ships in the bundle anyway, and where the backend
+  // lives), every reader of it has a default, and the deployed build passes the
+  // client id through --dart-define instead. A missing .env must not be the
+  // reason the app fails to start.
+  await dotenv.load(fileName: '.env', isOptional: true);
 
   // Restores a stored session and wires up Google Identity Services before the
   // first frame, so a signed-in visitor never flashes the logged-out nav.

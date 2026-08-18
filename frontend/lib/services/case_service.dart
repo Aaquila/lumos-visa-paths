@@ -1,11 +1,11 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/case_profile.dart';
+import 'api_config.dart';
 import 'auth_service.dart';
 
 /// Whether the backend's intake reasoner is actually configured.
@@ -43,11 +43,7 @@ class CaseService extends ChangeNotifier {
   static final instance = CaseService._();
 
   /// Constructs the API base URL from BACKEND_HOST and BACKEND_PORT in .env.
-  static String get baseUrl {
-    final host = dotenv.env['BACKEND_HOST'] ?? '127.0.0.1';
-    final port = dotenv.env['BACKEND_PORT'] ?? '8000';
-    return 'http://$host:$port';
-  }
+  static String get baseUrl => ApiConfig.baseUrl;
 
   static const _keyPrefix = 'lumos.case';
   static const _timeout = Duration(seconds: 45);

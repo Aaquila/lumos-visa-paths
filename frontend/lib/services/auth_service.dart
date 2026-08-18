@@ -8,6 +8,7 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/onboarding_profile.dart';
+import 'api_config.dart';
 
 @immutable
 class UserSession {
@@ -233,14 +234,10 @@ class AuthService extends ChangeNotifier {
   /// showing an empty feed as though there were no news.
   bool get needsReauth => isSignedIn && !(_session?.isDemo ?? false) && apiToken == null;
 
-  /// Where the backend lives — same BACKEND_HOST/BACKEND_PORT the other
-  /// services read, kept here rather than imported so this file keeps no
-  /// dependency on them.
-  static String get _backendBaseUrl {
-    final host = dotenv.env['BACKEND_HOST'] ?? '127.0.0.1';
-    final port = dotenv.env['BACKEND_PORT'] ?? '8000';
-    return 'http://$host:$port';
-  }
+  /// Where the backend lives — resolved exactly as every other service
+  /// resolves it, so the token exchange can never end up pointed somewhere
+  /// the rest of the app is not.
+  static String get _backendBaseUrl => ApiConfig.baseUrl;
 
   bool _busy = false;
   bool get isBusy => _busy;
