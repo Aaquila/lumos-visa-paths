@@ -504,6 +504,12 @@ class UnreadNewsFeedResponse(BaseModel):
     count: int
 
 
+class UnreadCountResponse(BaseModel):
+    """Response for GET /api/user/news/unread/count."""
+
+    count: int
+
+
 class AllNewsFeedResponse(BaseModel):
     """Response for GET /api/user/news/all."""
 

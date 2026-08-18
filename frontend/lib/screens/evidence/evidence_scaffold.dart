@@ -55,9 +55,25 @@ class EvidenceScaffold extends StatelessWidget {
 /// Loads the criteria file and the stored self-assessment once, then rebuilds
 /// on every change to either.
 class EvidenceLoader extends StatefulWidget {
-  const EvidenceLoader({super.key, required this.builder});
+  const EvidenceLoader({
+    super.key,
+    required this.builder,
+    this.standalone = true,
+  });
 
   final Widget Function(BuildContext context, EvidenceService service) builder;
+
+  /// Whether this loader owns the whole screen.
+  ///
+  /// The `/evidence` routes do, so their waiting and failure states get the
+  /// full page shell — nav, column, footer. The dashboard embeds one of these
+  /// as a single card inside its own [Scaffold], and a [Scaffold] nested in a
+  /// scroll view is handed unbounded height: layout throws, every render box
+  /// below it is left unsized, and the first hit test after that poisons the
+  /// mouse tracker for the rest of the page's life — nothing anywhere stays
+  /// clickable until a reload. Embedded loaders therefore stay out of the way
+  /// until the catalog is ready, rather than bringing a second page with them.
+  final bool standalone;
 
   @override
   State<EvidenceLoader> createState() => _EvidenceLoaderState();
@@ -72,6 +88,7 @@ class _EvidenceLoaderState extends State<EvidenceLoader> {
       future: _ready,
       builder: (context, snapshot) {
         if (snapshot.connectionState != ConnectionState.done) {
+          if (!widget.standalone) return const SizedBox.shrink();
           return const EvidenceScaffold(
             children: [
               SizedBox(height: T.s48),
@@ -80,6 +97,7 @@ class _EvidenceLoaderState extends State<EvidenceLoader> {
           );
         }
         if (snapshot.hasError || EvidenceService.instance.catalog == null) {
+          if (!widget.standalone) return const SizedBox.shrink();
           return EvidenceScaffold(
             children: [
               Text(

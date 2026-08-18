@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -136,7 +137,18 @@ class AuthService extends ChangeNotifier {
   AuthService._();
   static final instance = AuthService._();
 
-  static const clientId = String.fromEnvironment('GOOGLE_CLIENT_ID');
+  /// The build-time constant is what the deployed Render build sets
+  /// (`--dart-define=GOOGLE_CLIENT_ID=$GOOGLE_CLIENT_ID`, from render.yaml) —
+  /// checked first since it can't be overridden at runtime. Local dev has no
+  /// dart-define, so it falls back to the same id read from the bundled
+  /// `.env`'s `GOOGLE_AUTH_CLIENT_ID` (see docs/RUNNING.md), which is how a
+  /// `flutter run` with no extra flags still gets real Google sign-in instead
+  /// of silently falling back to a demo session.
+  static String get clientId {
+    const fromBuild = String.fromEnvironment('GOOGLE_CLIENT_ID');
+    if (fromBuild.isNotEmpty) return fromBuild;
+    return dotenv.env['GOOGLE_AUTH_CLIENT_ID']?.trim() ?? '';
+  }
   static const sessionDuration = Duration(days: 14);
   static const _storageKey = 'lumos.session';
 
@@ -180,12 +192,14 @@ class AuthService extends ChangeNotifier {
         _onAuthEvent,
         onError: (Object e) => _fail(e),
       );
-      // Silently restore a Google session where the platform supports it.
-      unawaited(
-        Future<void>.sync(
-          () => GoogleSignIn.instance.attemptLightweightAuthentication(),
-        ).then((_) {}).catchError((Object _) {}),
-      );
+      // Deliberately not calling attemptLightweightAuthentication() here.
+      // "Stay signed in" is already handled by the session persisted in
+      // [_restore] above; on web, the silent path goes through Chrome's
+      // native FedCM account picker, which renders outside Flutter's canvas
+      // and has been observed to leave the app's layout corrupted (widgets
+      // unresponsive, RenderObjects reporting infinite size) while it
+      // appears and dismisses. It bought nothing this app doesn't already
+      // have, so it isn't worth that cost.
     } catch (e) {
       _error = 'Google sign-in could not start: $e';
     }
@@ -195,27 +209,49 @@ class AuthService extends ChangeNotifier {
   void _onAuthEvent(GoogleSignInAuthenticationEvent event) {
     switch (event) {
       case GoogleSignInAuthenticationEventSignIn():
-        _adopt(event.user);
+        unawaited(_adopt(event.user));
       case GoogleSignInAuthenticationEventSignOut():
-        _session = null;
-        unawaited(_clearStored());
-        notifyListeners();
+        // Deliberately not clearing the session here. This stream reports
+        // Google's own notion of an active credential, which the app never
+        // relied on — the docstring above is explicit that "stay signed in"
+        // is this app's own persisted session, independent of GIS's. This
+        // event fires whenever Google's side sees no credential to
+        // auto-sign-in with (blocked third-party cookies, an expired Google
+        // cookie, FedCM restrictions...), which has nothing to do with
+        // whether *this app's* session is still valid, and was observed to
+        // silently sign out an already-signed-in person a few seconds after
+        // every load. An explicit sign-out already clears the session
+        // directly in [signOut] — it doesn't need this listener's help.
+        break;
     }
   }
 
-  void _adopt(GoogleSignInAccount user) {
-    // Onboarding answers belong to the person, not to the token —
-    // re-authenticating the same account must not make them start over.
-    final previous = _session;
-    final sameUser =
-        previous != null &&
-        (previous.userId == user.id || previous.email == user.email);
+  Future<void> _adopt(GoogleSignInAccount user) async {
+    // Onboarding answers belong to the person, not to the token or to the
+    // in-memory session — re-authenticating the same account must not make
+    // them start over, even after an explicit sign-out wiped the session.
+    final onboarding = await _loadPersistedOnboarding(user.id);
+
+    // This runs from a JS interop callback fired the instant Chrome's native
+    // FedCM account picker resolves and dismisses itself — outside Flutter's
+    // own frame scheduling. Committing the sign-in (and the notifyListeners
+    // below, which immediately triggers the guarded /dashboard redirect) in
+    // that same beat lands it in the middle of the browser's own reflow from
+    // that native UI closing, which has been observed to leave Flutter's
+    // layout engine reporting infinite-size RenderObjects and the mouse
+    // tracker permanently stuck — recoverable only by a full page reload.
+    // Waiting a beat lets that settle first, rather than committing the
+    // state change — and the redirect it triggers — synchronously inside
+    // the callback. SchedulerBinding.endOfFrame isn't used here because it
+    // only resolves once a frame is actually scheduled, which an idle app
+    // sitting on the sign-in page isn't guaranteed to do.
+    await Future<void>.delayed(const Duration(milliseconds: 300));
 
     _session = UserSession(
       displayName: user.displayName ?? user.email.split('@').first,
       email: user.email,
       userId: user.id,
-      onboarding: sameUser ? previous.onboarding : OnboardingProfile.empty,
+      onboarding: onboarding,
       photoUrl: user.photoUrl,
       idToken: user.authentication.idToken,
       expiresAt: DateTime.now().add(
@@ -263,7 +299,7 @@ class AuthService extends ChangeNotifier {
     notifyListeners();
     try {
       final user = await GoogleSignIn.instance.authenticate();
-      _adopt(user);
+      await _adopt(user);
       return true;
     } catch (e) {
       _fail(e);
@@ -275,11 +311,17 @@ class AuthService extends ChangeNotifier {
   /// a Google Cloud project. This never claims to be a real Google identity.
   Future<void> continueAsDemoUser({bool? rememberMe}) async {
     if (rememberMe != null) staySignedIn = rememberMe;
+    // Same reasoning as _adopt: the demo account is still one account, and
+    // re-entering it — even after a sign-out cleared the session — must not
+    // throw away onboarding answers already given.
+    const demoUserId = 'demo-user';
+    final onboarding = await _loadPersistedOnboarding(demoUserId);
     _session = UserSession(
       displayName: 'Demo Traveller',
       email: 'demo@lumos.app',
-      userId: 'demo-user',
+      userId: demoUserId,
       isDemo: true,
+      onboarding: onboarding,
       expiresAt: DateTime.now().add(
         staySignedIn ? sessionDuration : const Duration(hours: 12),
       ),
@@ -380,6 +422,42 @@ class AuthService extends ChangeNotifier {
       await prefs.setString(_storageKey, jsonEncode(session.toJson()));
     } catch (_) {
       // A session that survives only in memory is still a usable session.
+    }
+    // Mirrored under the account's own key, separate from the session blob
+    // above — that one is deleted on sign-out, but onboarding answers belong
+    // to the person and must survive a sign-out/sign-in cycle on the same
+    // account.
+    if (session.userId.isNotEmpty) {
+      unawaited(_persistOnboardingFor(session.userId, session.onboarding));
+    }
+  }
+
+  static const _onboardingKeyPrefix = 'lumos.onboarding';
+
+  Future<void> _persistOnboardingFor(
+    String userId,
+    OnboardingProfile onboarding,
+  ) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(
+        '$_onboardingKeyPrefix.$userId',
+        jsonEncode(onboarding.toJson()),
+      );
+    } catch (_) {}
+  }
+
+  Future<OnboardingProfile> _loadPersistedOnboarding(String userId) async {
+    if (userId.isEmpty) return OnboardingProfile.empty;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString('$_onboardingKeyPrefix.$userId');
+      if (raw == null) return OnboardingProfile.empty;
+      return OnboardingProfile.fromJson(
+        jsonDecode(raw) as Map<String, dynamic>,
+      );
+    } catch (_) {
+      return OnboardingProfile.empty;
     }
   }
 

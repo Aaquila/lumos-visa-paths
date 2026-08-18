@@ -1,11 +1,11 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/onboarding_profile.dart';
 import 'auth_service.dart';
-import 'news_service.dart';
 
 /// Persists a signed-in user's confirmed situation server-side.
 ///
@@ -24,7 +24,12 @@ class SituationService {
   SituationService._();
   static final instance = SituationService._();
 
-  static const baseUrl = NewsService.baseUrl;
+  static String get baseUrl {
+    final host = dotenv.env['BACKEND_HOST'] ?? '127.0.0.1';
+    final port = dotenv.env['BACKEND_PORT'] ?? '8000';
+    return 'http://$host:$port';
+  }
+
   static const _timeout = Duration(seconds: 8);
 
   /// Saves [situation] to the backend for the signed-in user, if any.

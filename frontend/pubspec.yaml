@@ -12,6 +12,7 @@ dependencies:
     sdk: flutter
 
   cupertino_icons: ^1.0.8
+  flutter_dotenv: ^5.2.0
   go_router: ^16.0.0
   google_sign_in: ^7.2.0
   shared_preferences: ^2.5.5
@@ -28,6 +29,7 @@ flutter:
   uses-material-design: true
 
   assets:
+    - .env
     - assets/data/generic_pathways.json
     - assets/data/evidence_criteria_o1_eb1.json
 

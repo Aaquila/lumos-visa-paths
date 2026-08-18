@@ -109,6 +109,19 @@ class VisaSituation {
   bool get hasDate => dateUnknown || changeYear != null;
   bool get isEmpty => !hasStatus && !hasGoal && !hasDate;
 
+  /// True when status has been answered comprehensively (not just a guess).
+  /// Requires either typed text or a specific chip selection.
+  bool get hasComprehensiveStatus {
+    if (statusChip == null || statusChip == 'Other / not sure') return false;
+    return statusText.trim().isNotEmpty || statusChip!.isNotEmpty;
+  }
+
+  /// True when goal has been answered comprehensively (not just a guess).
+  bool get hasComprehensiveGoal {
+    if (goalChip == null || goalChip == 'Not sure yet') return false;
+    return goalText.trim().isNotEmpty || goalChip!.isNotEmpty;
+  }
+
   /// The status as one sentence, for pre-filling intake and for showing back.
   String get statusSummary {
     final chip = statusChip?.trim() ?? '';

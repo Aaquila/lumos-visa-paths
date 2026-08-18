@@ -19,3 +19,5 @@ scripts/run_web.sh
 scripts/run_web.ps1
 scripts/run_web.ps1
 scripts/run_web.sh
+debug_personalization.py
+test_personalization.py

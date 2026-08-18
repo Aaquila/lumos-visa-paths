@@ -5,7 +5,6 @@ import '../../services/auth_service.dart';
 import '../../services/news_service.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/tokens.dart';
-import '../../widgets/badges.dart';
 import '../../widgets/news_item_card.dart';
 import '../../widgets/pill_button.dart';
 import '../../widgets/site_footer.dart';
@@ -49,6 +48,14 @@ class _NewsPageState extends State<NewsPage> {
   /// page is currently loaded — it doesn't change what the server fetches.
   bool _affectsYouOnly = false;
 
+  /// Toggle between 'personalized' (Claude-generated summaries) and 'generic'
+  /// (raw articles for all users). Authenticated users see both options;
+  /// unauthenticated users only see generic.
+  String _viewMode = 'personalized';
+
+  /// True while regenerating personalized summaries after visa status change.
+  bool _isRegeneratingPersonalization = false;
+
   /// The ID token seen at last check. A restored session (any reload, any
   /// new tab within the 14-day "stay signed in" window) comes back from
   /// storage `isSignedIn` but with no token — Google's ID token is
@@ -69,7 +76,8 @@ class _NewsPageState extends State<NewsPage> {
     super.initState();
     _scrollController = ScrollController();
     _scrollController.addListener(_onScroll);
-    _isAuthenticated = AuthService.instance.session != null &&
+    _isAuthenticated =
+        AuthService.instance.session != null &&
         !AuthService.instance.session!.isDemo;
     _lastAuthToken = AuthService.instance.session?.idToken;
     AuthService.instance.addListener(_onAuthChanged);
@@ -130,28 +138,28 @@ class _NewsPageState extends State<NewsPage> {
   }
 
   /// Fetches a page of articles from the API.
+  ///
+  /// If in generic view mode, always fetches public feed (all users).
+  /// If in personalized view mode and authenticated, fetches personalized feed
+  /// with Claude-generated summaries. Shows error state if it fails.
   Future<PersonalisedNewsFeed> _fetchPage(
     int offset, {
     bool forceRefresh = false,
   }) async {
-    // Return public feed if not authenticated
-    if (!_isAuthenticated) {
+    // Unauthenticated or viewing generic news — show public feed
+    if (!_isAuthenticated || _viewMode == 'generic') {
       return _publicFeed();
     }
 
+    // Personalized view for authenticated user
     final result = await NewsService.instance.getNews(
       limit: _pageSize,
       offset: offset,
       forceRefresh: forceRefresh,
     );
 
-    // The personalized feed failed (expired session, backend hiccup, etc).
-    // Rather than block the page on an error, fall back to this year's
-    // public updates — an empty result there just renders the empty state.
-    if (result.error != null || result.offline) {
-      return _publicFeed();
-    }
-
+    // Return the result as-is (including any errors) to show error state
+    // instead of silently falling back to public feed
     return result;
   }
 
@@ -203,7 +211,8 @@ class _NewsPageState extends State<NewsPage> {
           _allItems.addAll(result.items);
           _currentOffset = nextOffset;
           _totalItems = result.total;
-          _hasMoreItems = result.items.isNotEmpty &&
+          _hasMoreItems =
+              result.items.isNotEmpty &&
               (_currentOffset + _pageSize) < _totalItems;
           _isLoading = false;
         });
@@ -214,10 +223,7 @@ class _NewsPageState extends State<NewsPage> {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: const Text('Failed to load more articles'),
-            action: SnackBarAction(
-              label: 'Retry',
-              onPressed: _loadMore,
-            ),
+            action: SnackBarAction(label: 'Retry', onPressed: _loadMore),
           ),
         );
       }
@@ -323,9 +329,7 @@ class _NewsPageState extends State<NewsPage> {
         child: SizedBox(
           width: 22,
           height: 22,
-          child: CircularProgressIndicator(
-            strokeWidth: 2,
-          ),
+          child: CircularProgressIndicator(strokeWidth: 2),
         ),
       ),
     );
@@ -347,10 +351,7 @@ class _NewsPageState extends State<NewsPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      error,
-                      style: AppTheme.bodySm,
-                    ),
+                    Text(error, style: AppTheme.bodySm),
                     const SizedBox(height: T.s8),
                     PillButton(
                       label: 'Try again',
@@ -375,6 +376,7 @@ class _NewsPageState extends State<NewsPage> {
       children: [
         _header(),
         const SizedBox(height: T.s24),
+
         if (_loadError != null && _allItems.isNotEmpty) ...[
           _Panel(
             fill: T.pastelSky,
@@ -382,15 +384,17 @@ class _NewsPageState extends State<NewsPage> {
               children: [
                 const Icon(Icons.warning_outlined, color: T.graphite),
                 const SizedBox(width: T.s16),
-                Expanded(
-                  child: Text(_loadError!, style: AppTheme.bodySm),
-                ),
+                Expanded(child: Text(_loadError!, style: AppTheme.bodySm)),
               ],
             ),
           ),
           const SizedBox(height: T.s24),
         ],
-        if (_isAuthenticated && _allItems.isNotEmpty) ...[
+
+        // "Affects you only" filter (personalized view only)
+        if (_isAuthenticated &&
+            _viewMode == 'personalized' &&
+            _allItems.isNotEmpty) ...[
           _filterToggle(),
           const SizedBox(height: T.s16),
         ],
@@ -448,13 +452,14 @@ class _NewsPageState extends State<NewsPage> {
             const SizedBox(height: T.s16),
           ] else if (_allItems.isNotEmpty) ...[
             const SizedBox(height: T.s8),
-            Text(
-              'No more articles',
-              style: AppTheme.caption,
-            ),
+            Text('No more articles', style: AppTheme.caption),
             const SizedBox(height: T.s16),
           ],
         ],
+
+        // Regenerate button (personalized view only)
+        _buildRegenerateButton(),
+
         const SizedBox(height: T.s40),
       ],
     );
@@ -474,20 +479,138 @@ class _NewsPageState extends State<NewsPage> {
     );
   }
 
+  /// Regenerates personalized summaries for all articles.
+  ///
+  /// Called when user updates their visa situation/status. Clears existing
+  /// personalized headlines and summaries, then regenerates them based on
+  /// the user's current situation.
+  Future<void> _regeneratePersonalization() async {
+    if (!_isAuthenticated) return;
+
+    setState(() => _isRegeneratingPersonalization = true);
+
+    try {
+      final success = await NewsService.instance.regeneratePersonalization();
+
+      if (success && mounted) {
+        // Reload with freshly generated summaries
+        await _loadInitial(forceRefresh: true);
+
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Personalization regenerated! Your news is up to date.',
+              ),
+              duration: Duration(seconds: 3),
+            ),
+          );
+        }
+      } else if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to regenerate personalization.'),
+          ),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error: $e')));
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isRegeneratingPersonalization = false);
+      }
+    }
+  }
+
+  /// "Redo Personalization" button shown in personalized view.
+  ///
+  /// Appears when user may have updated their visa status and wants to
+  /// regenerate personalized summaries based on the new information.
+  Widget _buildRegenerateButton() {
+    if (_viewMode != 'personalized' || !_isAuthenticated) {
+      return const SizedBox.shrink();
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const SizedBox(height: T.s16),
+        Wrap(
+          spacing: T.s8,
+          runSpacing: T.s8,
+          children: [
+            PillButton(
+              label: _isRegeneratingPersonalization
+                  ? 'Regenerating...'
+                  : 'Redo Personalization',
+              icon: Icons.refresh,
+              variant: PillVariant.signal,
+              onPressed: _isRegeneratingPersonalization
+                  ? null
+                  : _regeneratePersonalization,
+            ),
+            Text(
+              "Use this if you've updated your visa status",
+              style: AppTheme.caption,
+            ),
+          ],
+        ),
+      ],
+    );
+  }
+
   Widget _header() {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        StepBadge(
-          step: 'News',
-          descriptor: _isAuthenticated
-              ? 'personalized for you'
-              : 'general updates',
+        Row(
+          children: [
+            PillButton(
+              label: 'NEWS · GENERAL UPDATES',
+              variant: _viewMode == 'generic'
+                  ? PillVariant.signal
+                  : PillVariant.outline,
+              onPressed: () => setState(() {
+                _viewMode = 'generic';
+                _loadInitial(forceRefresh: true);
+              }),
+            ),
+            const SizedBox(width: T.s8),
+            PillButton(
+              label: _isAuthenticated
+                  ? 'PERSONALIZED'
+                  : 'SIGN IN FOR PERSONALIZED',
+              variant: _viewMode == 'personalized' && _isAuthenticated
+                  ? PillVariant.signal
+                  : PillVariant.outline,
+              onPressed: _isAuthenticated
+                  ? () => setState(() {
+                      _viewMode = 'personalized';
+                      _loadInitial(forceRefresh: true);
+                    })
+                  : () {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Sign in to see personalized news updates for your visa situation.',
+                          ),
+                          duration: Duration(seconds: 3),
+                        ),
+                      );
+                    },
+            ),
+          ],
         ),
-        const SizedBox(height: T.s16),
+        const SizedBox(height: T.s24),
         Text(
           _isAuthenticated
-              ? 'Your personalized updates'
+              ? _viewMode == 'personalized'
+                    ? 'Your personalized updates'
+                    : 'Latest immigration news'
               : 'Latest immigration news',
           style: AppTheme.headingLg(context),
         ),
@@ -508,10 +631,7 @@ class _NewsPageState extends State<NewsPage> {
         const SizedBox(height: T.s8),
         ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 760),
-          child: Text(
-            _fallbackDisclaimer,
-            style: AppTheme.caption,
-          ),
+          child: Text(_fallbackDisclaimer, style: AppTheme.caption),
         ),
       ],
     );
@@ -520,10 +640,7 @@ class _NewsPageState extends State<NewsPage> {
 
 /// A bordered block. Reusable container style.
 class _Panel extends StatelessWidget {
-  const _Panel({
-    required this.child,
-    this.fill,
-  });
+  const _Panel({required this.child, this.fill});
 
   final Widget child;
   final Color? fill;

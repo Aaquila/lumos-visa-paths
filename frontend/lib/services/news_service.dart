@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 
 import '../models/news_item.dart';
@@ -26,12 +27,13 @@ class NewsService {
   NewsService._();
   static final instance = NewsService._();
 
-  /// Points at the local backend by default. Override per environment:
-  ///   flutter run --dart-define=API_BASE_URL=https://lumos-api.onrender.com
-  static const baseUrl = String.fromEnvironment(
-    'API_BASE_URL',
-    defaultValue: 'http://127.0.0.1:8000',
-  );
+  /// Constructs the API base URL from BACKEND_HOST and BACKEND_PORT in .env.
+  /// For different environments, update the .env file or override at deployment.
+  static String get baseUrl {
+    final host = dotenv.env['BACKEND_HOST'] ?? '127.0.0.1';
+    final port = dotenv.env['BACKEND_PORT'] ?? '8000';
+    return 'http://$host:$port';
+  }
 
   static const _timeout = Duration(seconds: 8);
 
@@ -305,6 +307,34 @@ class NewsService {
     } catch (e) {
       debugPrint('failed to get unread count: $e');
       return 0;
+    }
+  }
+
+  /// Regenerates personalized summaries for all articles.
+  ///
+  /// Called when the user updates their visa situation/status. Clears existing
+  /// personalized headlines and summaries, then regenerates them based on the
+  /// user's current situation. Returns true on success, false on failure.
+  Future<bool> regeneratePersonalization() async {
+    final uri = Uri.parse('$baseUrl/api/user/news/regenerate');
+
+    try {
+      final response = await http
+          .post(uri, headers: _headers())
+          .timeout(_timeout);
+
+      if (response.statusCode == 200) {
+        // Clear caches so next fetch gets fresh data
+        _personalisedCached = null;
+        _personalisedCachedAt = null;
+        return true;
+      }
+
+      debugPrint('regenerate returned ${response.statusCode}');
+      return false;
+    } catch (e) {
+      debugPrint('failed to regenerate personalization: $e');
+      return false;
     }
   }
 }

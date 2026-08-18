@@ -16,7 +16,6 @@ import '../../theme/tokens.dart';
 import '../../widgets/badges.dart';
 import '../../widgets/deadline_panel.dart';
 import '../../widgets/evidence_readiness_card.dart';
-import '../../widgets/news_notification_bar.dart';
 import '../../widgets/pill_button.dart';
 import '../../widgets/site_footer.dart';
 import '../../widgets/site_nav.dart';
@@ -42,49 +41,14 @@ class DashboardPage extends StatefulWidget {
   State<DashboardPage> createState() => _DashboardPageState();
 }
 
-class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserver {
+class _DashboardPageState extends State<DashboardPage> {
   late final Future<PathwayGraph> _graph = PathwayRepository.instance.load();
-  int _unreadNewsCount = 0;
-  bool _newsBarDismissed = false;
 
   @override
   void initState() {
     super.initState();
     CaseService.instance.load();
     DeadlineService.instance.load();
-    _loadUnreadCount();
-    WidgetsBinding.instance.addObserver(this);
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    super.dispose();
-  }
-
-  /// Load unread news count when app becomes visible
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      _loadUnreadCount();
-    }
-  }
-
-  Future<void> _loadUnreadCount() async {
-    try {
-      final count = await NewsService.instance.getUnreadCount();
-      if (mounted) {
-        setState(() {
-          _unreadNewsCount = count;
-          // Reset dismissal when count changes
-          if (count > 0) {
-            _newsBarDismissed = false;
-          }
-        });
-      }
-    } catch (_) {
-      // Silently fail on network errors
-    }
   }
 
   @override
@@ -112,17 +76,6 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
 
           return Column(
             children: [
-              // Show notification bar if there are unread articles and not dismissed
-              if (_unreadNewsCount > 0 && !_newsBarDismissed)
-                NewsNotificationBar(
-                  unreadCount: _unreadNewsCount,
-                  onViewPressed: () {
-                    context.go('/news');
-                  },
-                  onDismissed: () {
-                    setState(() => _newsBarDismissed = true);
-                  },
-                ),
               const SiteNav(transparent: false),
               Expanded(
                 child: SingleChildScrollView(
@@ -146,27 +99,7 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
                                 return Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Row(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Expanded(child: const _Greeting()),
-                                        if (!mobile)
-                                          PillButton(
-                                            label: 'Sign out',
-                                            icon: Icons.logout,
-                                            onPressed: () {
-                                              // The case is per-account and
-                                              // stays on disk; drop it from
-                                              // memory so the next sign-in
-                                              // starts from its own.
-                                              CaseService.instance.forget();
-                                              AuthService.instance.signOut();
-                                              context.go('/');
-                                            },
-                                          ),
-                                      ],
-                                    ),
+                                    const _Greeting(),
                                     const SizedBox(height: T.s40),
 
                                     if (profile == null) ...[
@@ -258,9 +191,7 @@ class _DashboardPageState extends State<DashboardPage> with WidgetsBindingObserv
                                         profile,
                                       )) ...[
                                         const SizedBox(height: T.s24),
-                                        _TalentEvidencePanel(
-                                          profile: profile,
-                                        ),
+                                        _TalentEvidencePanel(profile: profile),
                                       ],
                                     ],
 
@@ -733,6 +664,9 @@ class _TalentEvidencePanel extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return EvidenceLoader(
+      // One card inside the dashboard's own Scaffold and scroll view, so this
+      // loader must not bring a page shell of its own with it.
+      standalone: false,
       builder: (context, service) {
         final catalog = service.catalog;
         if (catalog == null) return const SizedBox.shrink();
@@ -835,10 +769,7 @@ class _Panel extends StatelessWidget {
               Expanded(
                 child: onTitleTap == null
                     ? titleText
-                    : InkWell(
-                        onTap: onTitleTap,
-                        child: titleText,
-                      ),
+                    : InkWell(onTap: onTitleTap, child: titleText),
               ),
               if (action != null)
                 Tooltip(

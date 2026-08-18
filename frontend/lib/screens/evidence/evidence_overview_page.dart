@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 
 import '../../models/evidence.dart';
 import '../../services/auth_service.dart';
+import '../../services/case_service.dart';
 import '../../theme/app_theme.dart';
 import '../../theme/tokens.dart';
 import '../../widgets/evidence_disclaimer.dart';
@@ -22,19 +23,33 @@ class EvidenceOverviewPage extends StatelessWidget {
     return EvidenceLoader(
       builder: (context, service) {
         final catalog = service.catalog!;
+        final profile = CaseService.instance.profile;
+
+        // Filter evidence sets by user's selected visa type
+        final displaySets = profile?.currentNodeId != null
+            ? catalog.sets
+                .where((set) => set.pathwayNodeId == profile!.currentNodeId)
+                .toList()
+            : catalog.sets;
+
         final readiness = service.allReadiness();
         final actions = service.topActions(limit: 2);
         final started = readiness.any((r) => r.hasStarted);
         final name = AuthService.instance.session?.preferredName;
         final compact = Breaks.isMobile(context);
 
+        // Get visa code for personalized heading
+        final visaCode = displaySets.isNotEmpty
+            ? displaySets.first.visaCode
+            : 'O-1/EB-1';
+
         return EvidenceScaffold(
           maxWidth: 880,
           children: [
             Text(
               name == null
-                  ? 'Building an O-1 or EB-1 profile'
-                  : '$name, here is your O-1 / EB-1 profile',
+                  ? 'Building your $visaCode profile'
+                  : '$name, here is your $visaCode profile',
               style: AppTheme.heading(context),
             ),
             const SizedBox(height: T.s16),
@@ -89,30 +104,39 @@ class EvidenceOverviewPage extends StatelessWidget {
               style: AppTheme.bodySm,
             ),
             const SizedBox(height: T.s24),
-            LayoutBuilder(
-              builder: (context, constraints) {
-                final columns = compact ? 1 : 2;
-                const gap = T.s16;
-                final width =
-                    (constraints.maxWidth - gap * (columns - 1)) / columns;
-                return Wrap(
-                  spacing: gap,
-                  runSpacing: gap,
-                  children: [
-                    for (var i = 0; i < catalog.sets.length; i++)
-                      SizedBox(
-                        width: width,
-                        child: EvidenceReadinessCard(
-                          set: catalog.sets[i],
-                          readiness: readiness[i],
-                          onOpen: () =>
-                              context.go('/evidence/${catalog.sets[i].id}'),
+            if (displaySets.isNotEmpty)
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final columns = compact ? 1 : 2;
+                  const gap = T.s16;
+                  final width =
+                      (constraints.maxWidth - gap * (columns - 1)) / columns;
+                  return Wrap(
+                    spacing: gap,
+                    runSpacing: gap,
+                    children: [
+                      for (final set in displaySets)
+                        SizedBox(
+                          width: width,
+                          child: EvidenceReadinessCard(
+                            set: set,
+                            readiness: service.readinessFor(set),
+                            onOpen: () =>
+                                context.go('/evidence/${set.id}'),
+                          ),
                         ),
-                      ),
-                  ],
-                );
-              },
-            ),
+                    ],
+                  );
+                },
+              )
+            else
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: T.s24),
+                child: Text(
+                  'Complete your intake to see your personalized visa category profile.',
+                  style: AppTheme.body,
+                ),
+              ),
 
             const SizedBox(height: T.s48),
             _AsOfNote(meta: catalog.meta),

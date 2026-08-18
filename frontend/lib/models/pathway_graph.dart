@@ -36,6 +36,9 @@ class PathwayNode {
     required this.sourceHints,
     required this.phase,
     this.requirements = const [],
+    this.parentId,
+    this.childIds = const [],
+    this.isSubCheckpoint = false,
   });
 
   final String id;
@@ -56,6 +59,15 @@ class PathwayNode {
 
   /// Rollout phase from `meta.rollout_order`; 0 = MVP-modeled, 3 = furthest out.
   final int phase;
+
+  /// Parent checkpoint ID if this is a sub-checkpoint (e.g., h1b.labor_cert)
+  final String? parentId;
+
+  /// List of child checkpoint IDs for sub-checkpoints
+  final List<String> childIds;
+
+  /// True if this node is a sub-checkpoint under a parent
+  final bool isSubCheckpoint;
 
   /// Phase 0 families are the ones wired to live reasoning today; everything
   /// else renders greyed-out as "not yet modeled" (PROJECT_PRD §3).
@@ -82,6 +94,9 @@ class PathwayNode {
           .where((s) => s.isNotEmpty)
           .toList(),
       phase: phase,
+      parentId: j['parent_id'] as String?,
+      childIds: (j['child_ids'] as List? ?? const []).cast<String>(),
+      isSubCheckpoint: j['is_sub_checkpoint'] as bool? ?? false,
     );
   }
 }
@@ -167,6 +182,16 @@ class PathwayGraph {
 
   PathwayNode? node(String id) => _nodesById[id];
   PathwayCategory? category(String id) => _categoriesById[id];
+
+  /// Get all child checkpoints of a parent node
+  List<PathwayNode> children(String parentId) =>
+      nodes.where((n) => n.parentId == parentId).toList();
+
+  /// Get the parent checkpoint of a sub-checkpoint
+  PathwayNode? parent(String nodeId) {
+    final node = this.node(nodeId);
+    return node?.parentId != null ? this.node(node!.parentId!) : null;
+  }
 
   List<PathwayEdge> edgesFrom(String id) =>
       edges.where((e) => e.from == id && !e.isSelfLoop).toList();

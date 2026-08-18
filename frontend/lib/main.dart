@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 
 import 'app/router.dart';
 import 'services/auth_service.dart';
@@ -7,6 +8,8 @@ import 'theme/app_theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await dotenv.load(fileName: '.env');
+
   // Restores a stored session and wires up Google Identity Services before the
   // first frame, so a signed-in visitor never flashes the logged-out nav.
   await AuthService.instance.initialize();

@@ -1,12 +1,12 @@
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../models/case_profile.dart';
 import 'auth_service.dart';
-import 'news_service.dart' show NewsService;
 
 /// Whether the backend's intake reasoner is actually configured.
 @immutable
@@ -42,8 +42,12 @@ class CaseService extends ChangeNotifier {
   CaseService._();
   static final instance = CaseService._();
 
-  /// Same origin as the news feed — one backend, one `--dart-define`.
-  static const baseUrl = NewsService.baseUrl;
+  /// Constructs the API base URL from BACKEND_HOST and BACKEND_PORT in .env.
+  static String get baseUrl {
+    final host = dotenv.env['BACKEND_HOST'] ?? '127.0.0.1';
+    final port = dotenv.env['BACKEND_PORT'] ?? '8000';
+    return 'http://$host:$port';
+  }
 
   static const _keyPrefix = 'lumos.case';
   static const _timeout = Duration(seconds: 45);

@@ -65,6 +65,7 @@ from .models import (
     ScrapeReport,
     SituationInput,
     SourceInfo,
+    UnreadCountResponse,
     UnreadNewsFeedResponse,
     UserNewsArticle,
     VoiceAssistantRequest,
@@ -815,6 +816,24 @@ async def save_situation(
 # ── Personalized news endpoints (user-specific, requires authentication) ──────
 
 
+@app.get("/api/user/news/unread/count", response_model=UnreadCountResponse)
+async def get_unread_news_count(
+    user: User = Depends(required_user),
+    db: Session = Depends(get_db),
+) -> UnreadCountResponse:
+    """The unread count only — what the dashboard badge polls for.
+
+    A plain row count, deliberately without the relevance/summary
+    personalization pass `get_unread_news` does: that pass is what makes the
+    full feed expensive, and a badge only ever needs the number.
+    """
+    count = db.query(UserNews).filter(
+        UserNews.user_id == user.id,
+        UserNews.is_unread == True,
+    ).count()
+    return UnreadCountResponse(count=count)
+
+
 @app.get("/api/user/news/unread", response_model=UnreadNewsFeedResponse)
 async def get_unread_news(
     user: User = Depends(required_user),
@@ -941,6 +960,55 @@ async def mark_news_as_read(
     db.commit()
 
     return MarkReadResponse(status="ok", marked_read_at=now)
+
+
+@app.post("/api/user/news/regenerate")
+async def regenerate_personalization(
+    user: User = Depends(required_user),
+    db: Session = Depends(get_db),
+) -> dict[str, str]:
+    """Regenerate personalized summaries for all articles.
+
+    Called when user updates their visa situation/status. Clears all existing
+    personalized_headline/personalized_summary and regenerates them from scratch
+    based on the user's current situation. Processes up to 100 articles per request.
+
+    Requires a valid Google ID token in the Authorization header.
+    Returns {"status": "regeneration_complete"} on success.
+    """
+    try:
+        db.query(UserNews).filter(
+            UserNews.user_id == user.id
+        ).update({
+            UserNews.personalized_headline: None,
+            UserNews.personalized_summary: None,
+            UserNews.summary_generated_at: None,
+        })
+        db.commit()
+
+        user_news_list = db.query(UserNews).filter(
+            UserNews.user_id == user.id
+        ).all()
+
+        pairs = [
+            (un, db.query(NewsArticle).filter(NewsArticle.id == un.article_id).first())
+            for un in user_news_list
+        ]
+        pairs = [(un, art) for un, art in pairs if art is not None]
+
+        await ensure_personalized_summaries(
+            db, user.id, pairs, personalized_summarizer, max_generate=100
+        )
+
+        log.info("regenerated personalization for user %s (%d articles)", user.id, len(pairs))
+        return {"status": "regeneration_complete"}
+
+    except Exception as e:
+        log.exception("regenerate personalization failed for user %s", user.id)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Regeneration failed: {str(e)}",
+        )
 
 
 # ── Voice assistant ────────────────────────────────────────────────────────────

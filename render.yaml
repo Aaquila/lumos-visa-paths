@@ -76,6 +76,21 @@ services:
       # link with judges/users.
       - key: GOOGLE_CLIENT_ID
         sync: false
+    headers:
+      # Google Identity Services signs in through a popup that posts its result
+      # back to this window. Chrome's default isolation makes that postMessage
+      # a console warning ("Cross-Origin-Opener-Policy policy would block the
+      # window.postMessage call"); `same-origin-allow-popups` keeps the page
+      # isolated from other origins while still letting our own popup talk back.
+      #
+      # Two neighbours this must NOT become:
+      #   - `same-origin` severs the popup, which breaks sign-in outright.
+      #   - Cross-Origin-Embedder-Policy blocks Google's button iframe, so it is
+      #     deliberately absent — Flutter's wasm multi-threading wants it, but
+      #     sign-in matters more here.
+      - path: /*
+        name: Cross-Origin-Opener-Policy
+        value: same-origin-allow-popups
     routes:
       # Flutter web is a client-routed SPA — unknown paths fall back to index.html.
       - type: rewrite

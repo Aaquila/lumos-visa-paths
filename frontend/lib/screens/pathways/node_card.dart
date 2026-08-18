@@ -149,6 +149,26 @@ class _NodeCardState extends State<NodeCard> {
                             style: AppTheme.caption.copyWith(fontSize: 10),
                           ),
                         ),
+                        if (widget.node.childIds.isNotEmpty)
+                          Tooltip(
+                            message: '${widget.node.childIds.length} sub-steps',
+                            child: Container(
+                              padding:
+                                  const EdgeInsets.symmetric(horizontal: 6),
+                              decoration: BoxDecoration(
+                                color: T.signalBlue.withValues(alpha: 0.1),
+                                borderRadius: BorderRadius.circular(10),
+                              ),
+                              child: Text(
+                                '${widget.node.childIds.length}',
+                                style: AppTheme.caption.copyWith(
+                                  fontSize: 9,
+                                  color: T.signalBlue,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ),
+                          ),
                         if (!widget.node.isModeled)
                           Tooltip(
                             message: phaseLabel(widget.node.phase),

@@ -16,9 +16,10 @@ from sqlalchemy.orm import sessionmaker, Session, relationship
 _env_path = Path(__file__).parent.parent.parent / '.env'
 
 # Database URL from environment, defaulting to SQLite for development.
+# Uses news.sqlite3 which has the user data (users, situations, personalization)
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    f"sqlite:///{Path(__file__).resolve().parent.parent / 'data' / 'users.sqlite3'}"
+    f"sqlite:///{Path(__file__).resolve().parent.parent / 'data' / 'news.sqlite3'}"
 )
 
 # Create engine with appropriate settings for the database type.
@@ -113,6 +114,14 @@ class NewsArticle(Base):
     published_at = Column(DateTime(timezone=True), nullable=True)
     scraped_at = Column(DateTime(timezone=True), default=utcnow, nullable=False, index=True)
     source = Column(String(256), nullable=False, index=True)
+
+    #: JSON array of pathway node ids, and JSON-encoded `DocumentMeta`, both
+    #: copied verbatim from the scraper's `NewsItem` (see `store.py`'s
+    #: `news_items` table for the same encoding). Without these, personalization
+    #: scores on bare title/summary text alone and structured Federal Register
+    #: signals (CFR references, agencies, document type) never reach the scorer.
+    matched_nodes = Column(Text, default="[]", nullable=False)
+    meta = Column(Text, default="{}", nullable=False)
 
     # Relationships
     user_news = relationship("UserNews", back_populates="article", cascade="all, delete-orphan")
@@ -210,6 +219,18 @@ def init_db() -> None:
                 if column not in existing:
                     conn.exec_driver_sql(
                         f"ALTER TABLE user_news ADD COLUMN {column} {ddl_type}"
+                    )
+
+            existing_articles = {
+                row[1] for row in conn.exec_driver_sql("PRAGMA table_info(news_articles)")
+            }
+            for column, ddl_type in (
+                ("matched_nodes", "TEXT NOT NULL DEFAULT '[]'"),
+                ("meta", "TEXT NOT NULL DEFAULT '{}'"),
+            ):
+                if column not in existing_articles:
+                    conn.exec_driver_sql(
+                        f"ALTER TABLE news_articles ADD COLUMN {column} {ddl_type}"
                     )
             conn.commit()
 

@@ -230,27 +230,35 @@ class _Details extends StatelessWidget {
   Widget build(BuildContext context) {
     return Theme(
       data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-      child: ExpansionTile(
-        tilePadding: EdgeInsets.zero,
-        childrenPadding: const EdgeInsets.only(bottom: T.s8),
-        expandedCrossAxisAlignment: CrossAxisAlignment.start,
-        dense: true,
-        visualDensity: VisualDensity.compact,
-        title: Text('Why this is here', style: AppTheme.caption),
-        children: [
-          Text(deadline.description, style: AppTheme.bodySm),
-          if (deadline.consequence.isNotEmpty) ...[
+      // ExpansionTile's header is a ListTile, and a ListTile paints its ink
+      // splash onto the nearest Material ancestor — which here is behind the
+      // card's own opaque background, so the splash never shows and Flutter
+      // asserts about it on every build. A transparent Material of its own
+      // sits above that background and gives the splash somewhere to land.
+      child: Material(
+        type: MaterialType.transparency,
+        child: ExpansionTile(
+          tilePadding: EdgeInsets.zero,
+          childrenPadding: const EdgeInsets.only(bottom: T.s8),
+          expandedCrossAxisAlignment: CrossAxisAlignment.start,
+          dense: true,
+          visualDensity: VisualDensity.compact,
+          title: Text('Why this is here', style: AppTheme.caption),
+          children: [
+            Text(deadline.description, style: AppTheme.bodySm),
+            if (deadline.consequence.isNotEmpty) ...[
+              const SizedBox(height: T.s8),
+              _Line(
+                icon: Icons.info_outline,
+                label: 'If this slips',
+                text: deadline.consequence,
+                dense: true,
+              ),
+            ],
             const SizedBox(height: T.s8),
-            _Line(
-              icon: Icons.info_outline,
-              label: 'If this slips',
-              text: deadline.consequence,
-              dense: true,
-            ),
+            Text(deadline.source.label, style: AppTheme.caption),
           ],
-          const SizedBox(height: T.s8),
-          Text(deadline.source.label, style: AppTheme.caption),
-        ],
+        ),
       ),
     );
   }

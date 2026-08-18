@@ -17,12 +17,13 @@ against articles, and no user-identifying data is logged.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from .models import NewsItem, SituationInput
+from .models import DocumentMeta, NewsItem, SituationInput
 from .database import NewsArticle, UserNews, UserVisaSituation, utcnow, SessionLocal
 from .relevance import BACKGROUND, RelevanceScorer
 from .summarizer import PersonalizedSummarizer
@@ -31,6 +32,37 @@ log = logging.getLogger("lumos.personalization")
 
 #: Process users in batches to avoid memory spikes on large user bases.
 BATCH_SIZE = 10
+
+
+def _to_news_item(article: NewsArticle) -> NewsItem:
+    """Rebuild the `NewsItem` the scorer expects from a stored `NewsArticle`.
+
+    `matched_nodes`/`meta` are JSON text on the row (see `NewsArticle` in
+    `database.py`) — the same encoding `store.py` uses for `news_items` — so a
+    malformed or pre-migration blank value (`'[]'`/`'{}'`) degrades to "no
+    structured signal" rather than raising.
+    """
+    try:
+        matched_nodes = json.loads(article.matched_nodes or "[]")
+    except (TypeError, ValueError):
+        matched_nodes = []
+    try:
+        meta = DocumentMeta.model_validate_json(article.meta or "{}")
+    except (TypeError, ValueError):
+        meta = DocumentMeta()
+
+    return NewsItem(
+        id=article.id,
+        source_id=article.source,
+        source_name=article.source,
+        title=article.title,
+        url=article.link,
+        summary=article.summary,
+        published_at=article.published_at,
+        first_seen_at=article.scraped_at,
+        matched_nodes=matched_nodes,
+        meta=meta,
+    )
 
 
 def sync_scraped_articles(items: list[NewsItem]) -> int:
@@ -88,6 +120,8 @@ def sync_scraped_articles(items: list[NewsItem]) -> int:
                     published_at=item.published_at,
                     scraped_at=item.first_seen_at,
                     source=item.source_name or item.source_id,
+                    matched_nodes=json.dumps(item.matched_nodes),
+                    meta=item.meta.model_dump_json(),
                 )
                 db.add(existing)
                 inserted += 1
@@ -96,6 +130,11 @@ def sync_scraped_articles(items: list[NewsItem]) -> int:
                 existing.summary = item.summary
                 if item.published_at is not None:
                     existing.published_at = item.published_at
+                # A later scrape can carry richer node-matching/metadata for an
+                # article that was already synced (e.g. pathways.py learned a
+                # new node) — refresh rather than leaving the first pass stuck.
+                existing.matched_nodes = json.dumps(item.matched_nodes)
+                existing.meta = item.meta.model_dump_json()
             matched[link] = existing
         db.commit()
         return inserted
@@ -167,18 +206,7 @@ async def personalize_articles(
         items_for_scoring: list[NewsItem] = []
         for article in articles:
             try:
-                item = NewsItem(
-                    id=article.id,
-                    source_id=article.source,
-                    source_name=article.source,
-                    title=article.title,
-                    url=article.link,
-                    summary=article.summary,
-                    published_at=article.published_at,
-                    first_seen_at=article.scraped_at,
-                    matched_nodes=[],  # No matched nodes from scraped items
-                )
-                items_for_scoring.append(item)
+                items_for_scoring.append(_to_news_item(article))
             except Exception as e:  # noqa: BLE001
                 log.warning("failed to convert article %s: %s", article.id, e)
                 continue
@@ -306,18 +334,7 @@ def refresh_relevance_levels(
     by_id: dict[str, tuple[UserNews, NewsArticle]] = {}
     for user_news, article in pairs:
         try:
-            items.append(
-                NewsItem(
-                    id=article.id,
-                    source_id=article.source,
-                    source_name=article.source,
-                    title=article.title,
-                    url=article.link,
-                    summary=article.summary,
-                    published_at=article.published_at,
-                    first_seen_at=article.scraped_at,
-                )
-            )
+            items.append(_to_news_item(article))
         except Exception as e:  # noqa: BLE001
             log.warning("failed to convert article %s: %s", article.id, e)
             continue
@@ -385,16 +402,7 @@ async def ensure_personalized_summaries(
     )
 
     async def _fill(user_news: UserNews, article: NewsArticle) -> None:
-        item = NewsItem(
-            id=article.id,
-            source_id=article.source,
-            source_name=article.source,
-            title=article.title,
-            url=article.link,
-            summary=article.summary,
-            published_at=article.published_at,
-            first_seen_at=article.scraped_at,
-        )
+        item = _to_news_item(article)
         try:
             insight = await summarizer.summarize(item, situation)
         except Exception:  # noqa: BLE001

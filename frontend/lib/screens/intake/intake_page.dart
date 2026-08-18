@@ -38,7 +38,7 @@ class IntakePage extends StatefulWidget {
   State<IntakePage> createState() => _IntakePageState();
 }
 
-enum _Mode { describe, questions }
+enum _Mode { describe, questions, edit }
 
 class _IntakePageState extends State<IntakePage> {
   late final Future<PathwayGraph> _graph = PathwayRepository.instance.load();
@@ -65,6 +65,14 @@ class _IntakePageState extends State<IntakePage> {
   /// so the page can say where the words came from rather than appearing to
   /// have typed them itself.
   bool _prefilled = false;
+
+  /// True when onboarding provided a comprehensive status answer that should
+  /// be confirmed rather than re-asked.
+  bool _statusFromOnboarding = false;
+
+  /// True when onboarding provided a comprehensive goal answer that should
+  /// be confirmed rather than re-asked.
+  bool _goalFromOnboarding = false;
 
   @override
   void initState() {
@@ -190,13 +198,50 @@ class _IntakePageState extends State<IntakePage> {
       _goalPath.clear();
       _askingGoal = false;
       _mode = mode;
+      _initOnboardingSkips();
     });
   }
 
+  /// Check if onboarding provided comprehensive answers that can skip the
+  /// questionnaire root questions.
+  void _initOnboardingSkips() {
+    final situation = AuthService.instance.onboarding.situation;
+    if (situation == null) return;
+
+    _statusFromOnboarding = situation.hasComprehensiveStatus;
+    _goalFromOnboarding = situation.hasComprehensiveGoal;
+  }
+
   Future<void> _accept(CaseProfile profile) async {
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+    final goRouter = GoRouter.of(context);
+
     await CaseService.instance.save(profile);
     if (!mounted) return;
-    context.go('/dashboard');
+
+    final graph = await _graph;
+    final currentNode = profile.currentNodeId != null
+        ? graph.node(profile.currentNodeId!)
+        : null;
+    final goalNode =
+        profile.goalNodeId != null ? graph.node(profile.goalNodeId!) : null;
+
+    final currentName = currentNode?.name ?? 'your current status';
+    final goalName = goalNode?.name ?? 'your goal';
+
+    scaffoldMessenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          'Updated your pathway\nYou are here: $currentName\nYou want to be: $goalName',
+        ),
+        duration: const Duration(seconds: 3),
+        backgroundColor: T.signalBlue,
+      ),
+    );
+
+    await Future.delayed(const Duration(milliseconds: 500));
+    if (!mounted) return;
+    goRouter.go('/dashboard');
   }
 
   /// The free-text path can resolve to the O-1 umbrella node without knowing
@@ -239,6 +284,8 @@ class _IntakePageState extends State<IntakePage> {
     final addition = _clarify.text.trim();
     if (addition.isEmpty) return;
 
+    final currentIteration = _result?.clarificationIteration ?? 1;
+
     final combined = [
       _situation.text.trim(),
       addition,
@@ -248,7 +295,18 @@ class _IntakePageState extends State<IntakePage> {
       _situation.text = combined;
       _clarify.clear();
     });
+
+    // Submit and increment iteration
     await _submitDescription();
+
+    // Increment clarification iteration on the result
+    if (_result != null && mounted) {
+      setState(() {
+        _result = _result!.copyWith(
+          clarificationIteration: currentIteration + 1,
+        );
+      });
+    }
   }
 
   // ── Build ─────────────────────────────────────────────────────────────────
@@ -329,7 +387,7 @@ class _IntakePageState extends State<IntakePage> {
           profile: result,
           graph: graph,
           onAccept: () => _accept(result),
-          onRedo: () => _restart(mode: _Mode.questions),
+          onRedo: () => setState(() => _mode = _Mode.edit),
           onNarrowO1: _narrowO1,
           onSelectGoal: _selectGoal,
           clarifyController: _clarify,
@@ -344,6 +402,7 @@ class _IntakePageState extends State<IntakePage> {
       null => [_chooser(context)],
       _Mode.describe => [_describeForm(context)],
       _Mode.questions => [_questionCard(context)],
+      _Mode.edit => [_editAnswersCard(context)],
     };
   }
 
@@ -483,6 +542,63 @@ class _IntakePageState extends State<IntakePage> {
   }
 
   Widget _questionCard(BuildContext context) {
+    final situation = AuthService.instance.onboarding.situation;
+
+    // Show confirmation if this is the first question and we have onboarding answers
+    if (!_askingGoal &&
+        _stepIds.length == 1 &&
+        _statusPath.isEmpty &&
+        situation != null &&
+        _statusFromOnboarding) {
+      return _confirmationCard(
+        context,
+        title: 'Where you are',
+        message: 'I found this in your setup answers:',
+        answer: situation.statusSummary,
+        onConfirm: () {
+          setState(() {
+            // Mark status as confirmed and move to goal
+            _statusPath.add(const IntakeOption(label: 'Confirmed from onboarding'));
+            _askingGoal = true;
+            _stepIds.add(Questionnaire.goalRoot);
+          });
+        },
+        onEdit: () {
+          // User said "no", proceed with normal questionnaire
+          setState(() => _statusFromOnboarding = false);
+        },
+      );
+    }
+
+    // Show goal confirmation if we have it and are now asking goal
+    if (_askingGoal &&
+        _goalPath.isEmpty &&
+        situation != null &&
+        _goalFromOnboarding &&
+        _statusPath.isNotEmpty) {
+      return _confirmationCard(
+        context,
+        title: 'Where you want to be',
+        message: 'I found this in your setup answers:',
+        answer: situation.goalSummary,
+        onConfirm: () {
+          setState(() {
+            // Mark goal as confirmed and resolve
+            _goalPath.add(const IntakeOption(label: 'Confirmed from onboarding'));
+            _result = Questionnaire.resolve(
+              statusPath: _statusPath,
+              goalPath: _goalPath,
+            );
+          });
+        },
+        onEdit: () {
+          // User said "no", proceed with normal questionnaire for goal
+          setState(() => _goalFromOnboarding = false);
+        },
+      );
+    }
+
+    // Normal questionnaire flow
     final step = Questionnaire.step(_stepIds.last);
 
     return _Panel(
@@ -524,6 +640,206 @@ class _IntakePageState extends State<IntakePage> {
           ),
         ],
       ),
+    );
+  }
+
+  Widget _confirmationCard(
+    BuildContext context, {
+    required String title,
+    required String message,
+    required String answer,
+    required VoidCallback onConfirm,
+    required VoidCallback onEdit,
+  }) {
+    return _Panel(
+      title: title,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(message, style: AppTheme.bodySm),
+          const SizedBox(height: T.s8),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(T.s16),
+            decoration: BoxDecoration(
+              color: T.skyWash.withValues(alpha: 0.3),
+              borderRadius: BorderRadius.circular(T.rInput),
+              border: Border.fromBorderSide(T.hairline),
+            ),
+            child: Text(answer, style: AppTheme.body),
+          ),
+          const SizedBox(height: T.s24),
+          Wrap(
+            spacing: T.s8,
+            runSpacing: T.s8,
+            children: [
+              PillButton(
+                label: 'Yes, that\'s right',
+                icon: Icons.check_circle_outline,
+                variant: PillVariant.signal,
+                onPressed: onConfirm,
+              ),
+              PillButton(
+                label: 'No, let me correct it',
+                onPressed: onEdit,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _editAnswersCard(BuildContext context) {
+    final result = _result;
+    final graph = _graph;
+    if (result == null) return const SizedBox();
+
+    return FutureBuilder<PathwayGraph>(
+      future: graph,
+      builder: (context, snapshot) {
+        final graph = snapshot.data;
+        final currentNode = result.currentNodeId != null
+            ? graph?.node(result.currentNodeId!)
+            : null;
+        final goalNode = result.goalNodeId != null
+            ? graph?.node(result.goalNodeId!)
+            : null;
+
+        return _Panel(
+          title: 'Edit Your Answers',
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              // What intake understood section
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(T.s16),
+                decoration: BoxDecoration(
+                  color: T.skyWash.withValues(alpha: 0.2),
+                  borderRadius: BorderRadius.circular(T.rInput),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('What intake understood', style: AppTheme.label),
+                    const SizedBox(height: T.s8),
+                    if (currentNode != null) ...[
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('You are here',
+                                    style: AppTheme.bodySm.copyWith(
+                                      color: T.pencilGray,
+                                    )),
+                                const SizedBox(height: T.s4),
+                                Text(currentNode.name, style: AppTheme.body),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: T.s8),
+                          PillButton(
+                            label: 'Change',
+                            onPressed: () => setState(() {
+                              _mode = null;
+                              _result = null;
+                            }),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: T.s8),
+                    ],
+                    if (goalNode != null) ...[
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('You want to be',
+                                    style: AppTheme.bodySm.copyWith(
+                                      color: T.pencilGray,
+                                    )),
+                                const SizedBox(height: T.s4),
+                                Text(goalNode.name, style: AppTheme.body),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: T.s8),
+                          PillButton(
+                            label: 'Change',
+                            onPressed: () => setState(() {
+                              _mode = null;
+                              _result = null;
+                            }),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+
+              // Still Open questions section
+              if (result.questions.isNotEmpty) ...[
+                const SizedBox(height: T.s24),
+                Text('Still open (clarify these)',
+                    style: AppTheme.label),
+                const SizedBox(height: T.s8),
+                Text(
+                  'Answer any of these to raise confidence:',
+                  style: AppTheme.bodySm,
+                ),
+                const SizedBox(height: T.s8),
+                for (final q in result.questions) ...[
+                  _Note(icon: Icons.help_outline, text: q),
+                  const SizedBox(height: T.s8),
+                ],
+                _Field(
+                  controller: _clarify,
+                  hint: 'Answer any of the above in your own words.',
+                  maxLines: 3,
+                  enabled: !_busy,
+                  voiceLabel: 'your answer',
+                ),
+                const SizedBox(height: T.s16),
+                PillButton(
+                  label: _busy ? 'Updating…' : 'Update with these answers',
+                  variant: PillVariant.signal,
+                  icon: Icons.check,
+                  busy: _busy,
+                  onPressed: _busy ? null : _submitClarification,
+                ),
+              ],
+
+              if (result.questions.isEmpty) ...[
+                const SizedBox(height: T.s24),
+                Text(
+                  'No open questions. Your answers look complete.',
+                  style: AppTheme.body,
+                ),
+              ],
+
+              const SizedBox(height: T.s16),
+              Row(
+                children: [
+                  PillButton(
+                    label: 'Back',
+                    icon: Icons.arrow_back,
+                    onPressed: () =>
+                        setState(() => _mode = null),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }
@@ -901,7 +1217,12 @@ class _ResultCard extends StatelessWidget {
         if (profile.questions.isNotEmpty) ...[
           const SizedBox(height: T.s16),
           _Panel(
-            title: 'Still open',
+            title: () {
+              if (profile.clarificationIteration >= 2) {
+                return 'Still clarifying';
+              }
+              return 'I need some info';
+            }(),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -928,11 +1249,26 @@ class _ResultCard extends StatelessWidget {
                   _Note(icon: Icons.error_outline, text: clarifyError!),
                 ],
                 const SizedBox(height: T.s8),
-                PillButton(
-                  label: busy ? 'Updating…' : 'Update my answer',
-                  icon: Icons.check,
-                  busy: busy,
-                  onPressed: busy ? null : onClarify,
+                Wrap(
+                  spacing: T.s8,
+                  runSpacing: T.s8,
+                  children: [
+                    PillButton(
+                      label: busy ? 'Updating…' : 'Update my answer',
+                      icon: Icons.check,
+                      busy: busy,
+                      onPressed: busy ? null : onClarify,
+                    ),
+                    if (profile.clarificationIteration >= 3)
+                      PillButton(
+                        label: 'Skip these questions',
+                        icon: Icons.fast_forward_outlined,
+                        onPressed: busy ? null : () {
+                          // Accept current result without clarification
+                          onAccept();
+                        },
+                      ),
+                  ],
                 ),
               ],
             ),

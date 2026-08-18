@@ -64,6 +64,7 @@ class CaseProfile {
     this.explanation = '',
     this.source = CaseSource.questionnaire,
     this.degraded = false,
+    this.clarificationIteration = 1,
     required this.updatedAt,
   });
 
@@ -93,6 +94,10 @@ class CaseProfile {
   /// True when the reasoner was unreachable and a weaker resolver stood in.
   final bool degraded;
 
+  /// Which iteration of clarification this is. Starts at 1, increments each time
+  /// user answers "still open" questions.
+  final int clarificationIteration;
+
   final DateTime updatedAt;
 
   bool get isResolved => currentNodeId != null;
@@ -103,6 +108,7 @@ class CaseProfile {
     String? goalNodeId,
     String? goalConfidence,
     List<String>? alternativeGoalIds,
+    int? clarificationIteration,
     bool clearGoal = false,
   }) => CaseProfile(
     currentNodeId: currentNodeId ?? this.currentNodeId,
@@ -115,6 +121,7 @@ class CaseProfile {
     explanation: explanation,
     source: source,
     degraded: degraded,
+    clarificationIteration: clarificationIteration ?? this.clarificationIteration,
     updatedAt: DateTime.now(),
   );
 
@@ -129,6 +136,7 @@ class CaseProfile {
     'explanation': explanation,
     'source': source.wire,
     'degraded': degraded,
+    'clarification_iteration': clarificationIteration,
     'updated_at': updatedAt.toIso8601String(),
   };
 
@@ -154,6 +162,7 @@ class CaseProfile {
     explanation: j['explanation'] as String? ?? '',
     source: CaseSource.parse(j['source'] as String?),
     degraded: j['degraded'] as bool? ?? false,
+    clarificationIteration: (j['clarification_iteration'] as num?)?.toInt() ?? 1,
     updatedAt:
         DateTime.tryParse(j['updated_at'] as String? ?? '') ?? DateTime.now(),
   );
