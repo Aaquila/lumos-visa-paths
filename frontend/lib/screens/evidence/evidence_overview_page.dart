@@ -25,10 +25,20 @@ class EvidenceOverviewPage extends StatelessWidget {
         final catalog = service.catalog!;
         final profile = CaseService.instance.profile;
 
-        // Filter evidence sets by user's selected visa type
-        final displaySets = profile?.currentNodeId != null
+        // Filter evidence sets by user's selected visa type and alternatives
+        final relevantNodeIds = profile != null
+            ? {
+                if (profile.currentNodeId != null) profile.currentNodeId!,
+                if (profile.goalNodeId != null) profile.goalNodeId!,
+                ...profile.alternativeGoalIds,
+              }
+            : <String>{};
+
+        final displaySets = relevantNodeIds.isNotEmpty
             ? catalog.sets
-                .where((set) => set.pathwayNodeId == profile!.currentNodeId)
+                .where((set) =>
+                    set.pathwayNodeId == null ||
+                    relevantNodeIds.contains(set.pathwayNodeId))
                 .toList()
             : catalog.sets;
 

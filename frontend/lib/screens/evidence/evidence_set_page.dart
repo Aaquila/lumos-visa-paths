@@ -72,6 +72,11 @@ class EvidenceSetPage extends StatelessWidget {
             const SizedBox(height: T.s32),
             _ReadinessPanel(readiness: readiness),
 
+            if (readiness.hasStarted) ...[
+              const SizedBox(height: T.s24),
+              _ProfileTracker(set: set, service: service),
+            ],
+
             if (set.structureExplainer != null) ...[
               const SizedBox(height: T.s24),
               _NoteBlock(
@@ -465,6 +470,107 @@ class _ItemRow extends StatelessWidget {
           ),
         ),
       ),
+    );
+  }
+}
+
+class _ProfileTracker extends StatelessWidget {
+  const _ProfileTracker({required this.set, required this.service});
+
+  final EvidenceSet set;
+  final EvidenceService service;
+
+  @override
+  Widget build(BuildContext context) {
+    final criteria = set.criteria;
+    if (criteria.isEmpty) return const SizedBox.shrink();
+
+    final met = criteria
+        .where((c) =>
+            service.strengthFor(c.id) == EvidenceStrength.strong ||
+            service.strengthFor(c.id) == EvidenceStrength.haveEvidence)
+        .length;
+    final inProgress =
+        criteria.where((c) => service.strengthFor(c.id).isMoving).length;
+    final total = criteria.length;
+    final remaining = total - met - inProgress;
+
+    return Container(
+      padding: const EdgeInsets.all(T.cardPadding),
+      decoration: BoxDecoration(
+        color: T.pastelMint.withValues(alpha: 0.4),
+        borderRadius: BorderRadius.circular(T.rCard),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('Your progress snapshot', style: AppTheme.badge),
+          const SizedBox(height: T.s16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              _TrackerStat(
+                label: 'Criteria met',
+                value: met.toString(),
+                color: T.signalBlue,
+              ),
+              _TrackerStat(
+                label: 'In progress',
+                value: inProgress.toString(),
+                color: T.pastelMint,
+              ),
+              _TrackerStat(
+                label: 'To-do',
+                value: remaining.toString(),
+                color: T.pastelPink,
+              ),
+            ],
+          ),
+          const SizedBox(height: T.s16),
+          Text(
+            set.threshold == null
+                ? 'Keep building your profile.'
+                : 'You need at least ${set.threshold} criteria. '
+                    '$met of $total done.',
+            style: AppTheme.bodySm,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _TrackerStat extends StatelessWidget {
+  const _TrackerStat({
+    required this.label,
+    required this.value,
+    required this.color,
+  });
+
+  final String label;
+  final String value;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        Container(
+          width: 50,
+          height: 50,
+          decoration: BoxDecoration(
+            color: color.withValues(alpha: 0.3),
+            borderRadius: BorderRadius.circular(T.rInput),
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            value,
+            style: AppTheme.heading(context).copyWith(fontSize: 20, color: color),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(label, style: AppTheme.caption),
+      ],
     );
   }
 }

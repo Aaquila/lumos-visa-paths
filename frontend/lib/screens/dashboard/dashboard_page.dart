@@ -185,6 +185,7 @@ class _DashboardPageState extends State<DashboardPage> {
                                         graph: graph,
                                         currentNodeId: currentNodeId,
                                         goalNodeId: profile.goalNodeId,
+                                        alternativeGoalIds: profile.alternativeGoalIds,
                                       ),
 
                                       if (EvidenceService.isTalentTrack(
@@ -578,12 +579,14 @@ class _RoutePanel extends StatelessWidget {
     required this.graph,
     required this.currentNodeId,
     required this.goalNodeId,
+    this.alternativeGoalIds = const [],
   });
 
   final bool mobile;
   final PathwayGraph? graph;
   final String? currentNodeId;
   final String? goalNodeId;
+  final List<String> alternativeGoalIds;
 
   @override
   Widget build(BuildContext context) {
@@ -634,6 +637,49 @@ class _RoutePanel extends StatelessWidget {
                   ),
           ),
           const SizedBox(height: T.s16),
+          if (alternativeGoalIds.isNotEmpty && graph != null) ...[
+            Container(
+              padding: const EdgeInsets.all(T.s16),
+              decoration: BoxDecoration(
+                color: T.paper,
+                border: Border.all(color: T.pencilGray, width: 1),
+                borderRadius: BorderRadius.circular(T.rCard),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Other routes open to you',
+                    style: AppTheme.label.copyWith(color: T.ink),
+                  ),
+                  const SizedBox(height: T.s8),
+                  Wrap(
+                    spacing: T.s8,
+                    runSpacing: T.s8,
+                    children: [
+                      for (final altId in alternativeGoalIds)
+                        if (graph!.node(altId) != null)
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 6,
+                            ),
+                            decoration: BoxDecoration(
+                              color: T.pastelSky.withValues(alpha: 0.3),
+                              borderRadius: BorderRadius.circular(T.rInput),
+                            ),
+                            child: Text(
+                              graph!.node(altId)!.name,
+                              style: AppTheme.caption.copyWith(color: T.ink),
+                            ),
+                          ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: T.s16),
+          ],
           Align(
             alignment: Alignment.centerLeft,
             child: PillButton(
@@ -671,10 +717,21 @@ class _TalentEvidencePanel extends StatelessWidget {
         final catalog = service.catalog;
         if (catalog == null) return const SizedBox.shrink();
 
+        // Filter to only relevant sets: current, goal, or alternatives
+        final relevantNodeIds = {
+          if (profile.currentNodeId != null) profile.currentNodeId!,
+          if (profile.goalNodeId != null) profile.goalNodeId!,
+          ...profile.alternativeGoalIds,
+        };
+
         // The resolved category (if any) leads; everything else follows in
         // catalog order.
-        final sets = [...catalog.sets]
-          ..sort((a, b) {
+        final sets = [
+          for (final set in catalog.sets)
+            if (set.pathwayNodeId == null ||
+                relevantNodeIds.contains(set.pathwayNodeId))
+              set,
+        ]..sort((a, b) {
             bool matches(EvidenceSet s) =>
                 s.pathwayNodeId == profile.currentNodeId ||
                 s.pathwayNodeId == profile.goalNodeId;
