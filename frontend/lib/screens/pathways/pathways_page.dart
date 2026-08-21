@@ -59,7 +59,7 @@ class PathwaysPage extends StatefulWidget {
 
 class _PathwaysPageState extends State<PathwaysPage> {
   /// Zoom bounds, shared by the viewport, the buttons and "fit to screen".
-  static const _minScale = 0.4;
+  static const _minScale = 0.1;
   static const _maxScale = 2.5;
 
   final _transform = TransformationController();

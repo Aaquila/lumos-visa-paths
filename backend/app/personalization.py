@@ -402,7 +402,11 @@ async def ensure_personalized_summaries(
     )
 
     async def _fill(user_news: UserNews, article: NewsArticle) -> None:
-        item = _to_news_item(article)
+        try:
+            item = _to_news_item(article)
+        except Exception as e:  # noqa: BLE001
+            log.warning("failed to convert article %s: %s", article.id, e)
+            return
         try:
             insight = await summarizer.summarize(item, situation)
         except Exception:  # noqa: BLE001
