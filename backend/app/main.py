@@ -1023,8 +1023,12 @@ async def get_all_news(
         if (article := db.query(NewsArticle).filter(NewsArticle.id == user_news.article_id).first())
     ]
 
-    refresh_relevance_levels(db, user.id, pairs, relevance_scorer)
-    await ensure_personalized_summaries(db, user.id, pairs, personalized_summarizer)
+    try:
+        refresh_relevance_levels(db, user.id, pairs, relevance_scorer)
+        await ensure_personalized_summaries(db, user.id, pairs, personalized_summarizer)
+    except Exception:
+        log.exception("failed to refresh/personalize news for user %s", user.id)
+        raise HTTPException(status_code=500, detail="Failed to load personalized news")
 
     articles = [
         UserNewsArticle(
