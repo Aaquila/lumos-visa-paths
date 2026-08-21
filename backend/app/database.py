@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import (
-    Column, String, Text, Integer, Boolean, DateTime, ForeignKey, Index, create_engine, event
+    Column, String, Text, Integer, Boolean, DateTime, ForeignKey, Index, create_engine, event,
+    inspect,
 )
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, Session, relationship
@@ -200,39 +201,39 @@ def init_db() -> None:
 
     `create_all` only creates tables that don't exist yet — it never alters an
     existing table, so a `user_news` row written before `personalized_summary`
-    existed would otherwise be invisible to every read after a deploy. SQLite's
-    `ALTER TABLE ... ADD COLUMN` is safe and idempotent; existing rows get NULL
-    until the next personalization pass fills them in.
+    existed would otherwise be invisible to every read after a deploy.
+    `ALTER TABLE ... ADD COLUMN` is safe and idempotent on both SQLite and
+    Postgres; existing rows get NULL (or the given default) until the next
+    personalization pass fills them in.
     """
     Base.metadata.create_all(bind=engine)
-    if DATABASE_URL.startswith("sqlite"):
-        with engine.connect() as conn:
-            existing = {
-                row[1] for row in conn.exec_driver_sql("PRAGMA table_info(user_news)")
-            }
-            for column, ddl_type in (
-                ("personalized_summary", "TEXT"),
-                ("personalized_headline", "TEXT"),
-                ("summary_generated_at", "DATETIME"),
-                ("relevance_level", "VARCHAR(32) NOT NULL DEFAULT 'worth_knowing'"),
-            ):
-                if column not in existing:
-                    conn.exec_driver_sql(
-                        f"ALTER TABLE user_news ADD COLUMN {column} {ddl_type}"
-                    )
 
-            existing_articles = {
-                row[1] for row in conn.exec_driver_sql("PRAGMA table_info(news_articles)")
-            }
-            for column, ddl_type in (
-                ("matched_nodes", "TEXT NOT NULL DEFAULT '[]'"),
-                ("meta", "TEXT NOT NULL DEFAULT '{}'"),
-            ):
-                if column not in existing_articles:
-                    conn.exec_driver_sql(
-                        f"ALTER TABLE news_articles ADD COLUMN {column} {ddl_type}"
-                    )
-            conn.commit()
+    datetime_type = "DATETIME" if DATABASE_URL.startswith("sqlite") else "TIMESTAMPTZ"
+    inspector = inspect(engine)
+
+    with engine.connect() as conn:
+        existing = {col["name"] for col in inspector.get_columns("user_news")}
+        for column, ddl_type in (
+            ("personalized_summary", "TEXT"),
+            ("personalized_headline", "TEXT"),
+            ("summary_generated_at", datetime_type),
+            ("relevance_level", "VARCHAR(32) NOT NULL DEFAULT 'worth_knowing'"),
+        ):
+            if column not in existing:
+                conn.exec_driver_sql(
+                    f"ALTER TABLE user_news ADD COLUMN {column} {ddl_type}"
+                )
+
+        existing_articles = {col["name"] for col in inspector.get_columns("news_articles")}
+        for column, ddl_type in (
+            ("matched_nodes", "TEXT NOT NULL DEFAULT '[]'"),
+            ("meta", "TEXT NOT NULL DEFAULT '{}'"),
+        ):
+            if column not in existing_articles:
+                conn.exec_driver_sql(
+                    f"ALTER TABLE news_articles ADD COLUMN {column} {ddl_type}"
+                )
+        conn.commit()
 
 
 def get_db() -> Session:
